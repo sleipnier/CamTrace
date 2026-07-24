@@ -14,38 +14,145 @@ python -m pip install -r requirements.txt
 
 系统还需安装 `ffmpeg` 和 `ffprobe`。
 
-## HyperAI 视频上传服务
+## HyperAI CAM//TRACE Web 服务
 
-官方环境推荐 RTX 3090、CUDA 11.8 和 PyTorch 2.0.1，使用 `hyperai_install.sh`。RTX 5090 必须选择 HyperAI PyTorch 2.8 GPU 镜像，并使用经过实机验证的 `hyperai_install_blackwell.sh` 将扩展移植到 CUDA 12.8 / `sm_120`；不能在 5090 上运行官方 CUDA 11.8 二进制。
+Web 服务由 React、FastAPI 和后台 GPU 重建任务组成。FastAPI 默认在同一端口提供 /api 和已构建的 frontend/dist，不再依赖 Gradio 页面。
 
-HyperAI 配置：
+### 环境与安装
 
-1. 将本项目放在 `/hyperai/home/videotocamera`。
-2. 将容器端口 `7860` 映射为 `vtc-gradio`。
-3. 根据 `hyperai.env.example` 配置普通环境变量，并把 `VTC_AUTH_PASSWORD` 配置为 Secret。
-4. RTX 3090 运行 `hyperai_install.sh`；RTX 5090 运行 `hyperai_install_blackwell.sh`。5090 安装脚本会将 Python 包持久化到 `/hyperai/home/.pylibs`，避免停止容器后被 HyperAI 删除。
-5. 运行 `bash /hyperai/home/videotocamera/hyperai_start.sh` 启动上传界面。
+官方环境推荐 RTX 3090、CUDA 11.8 和 PyTorch 2.0.1，使用 hyperai_install.sh。RTX 5090 必须选择兼容 Blackwell 的 HyperAI PyTorch GPU 镜像，并使用经过实机验证的 hyperai_install_blackwell.sh 安装 CUDA 扩展；不能在 RTX 5090 上直接运行官方 CUDA 11.8 二进制。
 
-每个上传任务使用随机 UUID scene 和独立工作目录；跨进程文件锁确保单张 GPU 同时只执行一个任务。服务默认限制为 200MB、60 秒、8-1000 帧和 3840x2160。成功后下载的 ZIP 包含：
+HyperAI 中只有 /hyperai/home 会在容器停止后持久保留。项目、Python 用户包、模型、运行结果和缓存都应放在该目录下。
 
-```text
+~~~bash
+cd /hyperai/home/videotocamera  # 替换成项目实际目录
+
+# RTX 3090
+bash hyperai_install.sh
+
+# RTX 5090
+bash hyperai_install_blackwell.sh
+~~~
+
+系统还必须能够执行 ffmpeg、ffprobe 和 nvidia-smi。
+
+### 构建并启动
+
+首次启动或前端代码变更后构建：
+
+~~~bash
+cd /hyperai/home/videotocamera/frontend
+npm install
+npm run build
+~~~
+
+启动 API 与网页：
+
+~~~bash
+cd /hyperai/home/videotocamera
+
+export VTC_PROJECT_ROOT="$PWD"
+export VTC_HOME=/hyperai/home
+export VTC_RUNTIME_ROOT=/hyperai/home/vtc-runtime
+export VTC_MEGASAM_ROOT=/hyperai/home/mega-sam
+export VTC_HOST=0.0.0.0
+export VTC_PORT=7860
+
+python api_server.py
+~~~
+
+如果项目直接位于 /hyperai/home，先进入 /hyperai/home，并仍然显式设置 VTC_PROJECT_ROOT="$PWD"，避免启动到旧的部署副本。
+
+也可以使用：
+
+~~~bash
+VTC_PROJECT_ROOT="$PWD" VTC_HOME=/hyperai/home bash hyperai_start.sh
+~~~
+
+在 HyperAI 控制台映射容器端口 7860。健康检查：
+
+~~~bash
+curl http://127.0.0.1:7860/api/health
+~~~
+
+预期响应：
+
+~~~json
+{"status":"ok","service":"camera-trace-api"}
+~~~
+
+配置 VTC_AUTH_USER 和 VTC_AUTH_PASSWORD 后，除 /api/health 外均启用 HTTP Basic Auth。首页返回 401 通常表示服务已经运行，但请求没有携带用户名和密码。临时本地验证可在启动前执行：
+
+~~~bash
+unset VTC_AUTH_USER
+unset VTC_AUTH_PASSWORD
+~~~
+
+生产映射地址不应匿名暴露。/favicon.ico 返回 404 只表示尚未配置网站图标，不影响 API 和重建功能。
+
+### 上传限制与任务隔离
+
+默认限制：
+
+- 文件最大 200 MB。
+- 视频最长 60 秒。
+- 视频必须包含 8～1000 帧。
+- 最大分辨率 3840×2160。
+- 支持 MP4、MOV、MKV、AVI、WEBM 和 M4V。
+
+每个上传任务使用独立 UUID、临时目录和输出目录。跨进程 .vtc-gpu.lock 保证同一 MegaSaM 根目录一次只执行一个 GPU 重建任务。成功后下载的 ZIP 包含：
+
+~~~text
 camera_pose_stamped.jsonl
 camera_trajectory.csv
 camera_cartesian_trajectory.json
 manifest.json
-```
+~~~
 
-`manifest.json` 记录输入及输出 SHA-256、视频属性、任务 ID 和安全状态。成功或失败后都会清理大型中间文件，只保留最终 ZIP。服务强制启用 Gradio 用户名和密码，不应匿名暴露端口映射 URL。
+manifest.json 记录输入和输出 SHA-256、视频属性、算法数据集 ID 与安全状态。大型中间文件会在任务结束后清理；最终 ZIP 按 VTC_RESULT_TTL_SECONDS 和总空间限制管理。任务记录可以继续存在，但 resultAvailable: false 表示 ZIP 已经过期或被清理。
+
+### 任务进度说明
+
+当前进度是阶段进度，不是模型内部的逐帧百分比：
+
+| 百分比 | 状态 | 实际含义 |
+| ---: | --- | --- |
+| 5% | uploaded | 上传文件已安全保存 |
+| 15% | validating | ffprobe 正在解析并校验视频 |
+| 28% | queued | 视频校验完成，准备进入 GPU 队列 |
+| 45% | reconstructing | 等待 GPU 文件锁，或正在执行抽帧、Depth Anything、UniDepth、MegaSaM |
+| 90% | packaging | 校验轨迹并生成 ZIP 与 manifest |
+| 100% | succeeded | 轨迹与下载产物就绪 |
+
+因此任务在 45% 停留数分钟不一定是卡死。45% 覆盖 GPU 锁等待和整个重建子进程，期间目前没有更细的 API 进度回报。耗时与帧数、分辨率、首次模型加载、GPU 型号及队列长度有关；例如约 300 帧的视频在 RTX 5090 上可能需要数分钟。
+
+VTC_JOB_TIMEOUT_SECONDS 默认是 1800 秒。GPU 锁等待和实际 GPU 子进程分别执行超时控制。不要仅因为 45% 数分钟未变化就重启服务；服务重启会把未完成任务标记为 failed / SERVICE_RESTARTED。
+
+排查命令：
+
+~~~bash
+# 查看任务详情；未启用认证时删除 -u 参数
+curl -u "$VTC_AUTH_USER:$VTC_AUTH_PASSWORD" http://127.0.0.1:7860/api/jobs/<job_id>
+
+# 查看 GPU 与相关进程
+nvidia-smi
+ps -eo pid,ppid,etime,stat,cmd | grep -E 'video_to_camera|python'
+
+# 查看失败任务保留的流水线日志
+find /hyperai/home/vtc-runtime/errors -maxdepth 2 -type f -name '*.log'
+~~~
+
+成功任务的临时工作目录和 pipeline.log 会被清理；失败任务的日志复制到 vtc-runtime/errors。服务启动时，遗留的非终态任务会被标记为 SERVICE_RESTARTED，避免永久停留在处理中。
 
 ### 从 GitHub 更新 Web 页面
 
-网页和服务代码由 GitHub `main` 分支维护。队友提交并合并修改后，在 HyperAI 终端运行：
+队友提交并合并修改后，在项目目录运行：
 
-```bash
-bash /hyperai/home/videotocamera/hyperai_update.sh
-```
+~~~bash
+bash hyperai_update.sh
+~~~
 
-脚本只接受 fast-forward 更新，容器中存在未提交修改时会拒绝覆盖。拉取后会先检查 Python 语法，再重启 Gradio，并等待 `7860` 端口实际返回 HTTP；运行日志写入 `/hyperai/home/app.log`。
+更新脚本只接受 fast-forward；存在未提交修改时会拒绝覆盖。更新后应重新构建前端、执行 Python 语法检查并重启 FastAPI。
 
 ## 一条命令处理视频
 
@@ -123,7 +230,7 @@ python render_camera_trajectory_video.py camera_dataset_<job_id>.zip \
 
 视频按数据集时间戳播放，用 `--speed 2` 可生成两倍速视频，`--fps 60` 可调整输出帧率。画面中的视锥和 XYZ 轴按 camera-to-parent 与 OpenCV optical 轴约定解释。`Camera POV` 面板投影一个完全由 Python 几何构造的固定不对称目标：红色鼻锥定义正面，粉色侧翼和偏心绿色天线用于区分侧面和背面，适合检查 360 度环绕运镜。目标中心默认取所有镜头 +Z 光轴的最小二乘交会点；也可通过 CLI `--target X Y Z` 或网页输入完整 XYZ。CSV 不包含真实图像、物体标签、深度或点云，因此模型不是物体检测或生成式视频结果。数据也不包含机械臂关节、连杆状态或相机到末端的手眼标定，不能当作机械臂末端轨迹或可执行命令。
 
-HyperAI Gradio 页面中的 `Visualize trajectory / 轨迹可视化` 页签提供相同功能。可以直接上传服务生成的 ZIP，或上传 `camera_trajectory.csv`、Cartesian JSON、PoseStamped JSONL，在线预览并下载 MP4。可视化输入限制为 25MB 和最多 1000 个位姿，生成结果沿用服务的自动过期清理策略。
+CAM//TRACE Web 页面可以直接导入服务生成的 ZIP，或导入 `camera_trajectory.csv`、Cartesian JSON、PoseStamped JSONL，在 Three.js 中检查路径和相机朝向，并生成、在线预览及下载多视角 MP4。可视化输入限制为 25 MB 和最多 1000 个位姿。可视化任务状态会持久化；服务重启时，中断的渲染任务会标记为 `SERVICE_RESTARTED`，已完成记录对应的 MP4 丢失时会标记为 `VIDEO_EXPIRED`。
 
 `camera_pose_stamped.jsonl` 每行是一帧：
 

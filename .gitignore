@@ -28,3 +28,21 @@ current-gradio-requests.txt
 # Independent web frontend
 frontend/node_modules/
 frontend/*.tsbuildinfo
+
+# HyperAI-local environments, model caches, smoke outputs, and diagnostics
+.pylibs/
+.torch/
+cache/
+huggingface/
+smoke-work/
+smoke-output/
+videotocamera.pre-git-*/
+base-errors*.txt
+compat-report.txt
+env-report.txt
+model-preview.png
+*-probe.json
+nystrom-*.txt
+ready.txt
+web-viz-*.txt
+vtc-deploy-key.pub

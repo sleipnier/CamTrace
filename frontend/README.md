@@ -13,6 +13,12 @@ npm run dev
 npm run build
 ```
 
-本地开发前请先在仓库根目录启动 FastAPI（默认端口 `8000`）。Vite 会把 `/api` 代理到该服务。
+本地开发前请先在仓库根目录启动 FastAPI（默认端口 `7860`）：
+
+```bash
+python api_server.py
+```
+
+Vite 会把 `/api` 代理到该服务。
 
 接口与传输协议见仓库根目录的 `API_AND_DEVICE_PROTOCOL.md`。

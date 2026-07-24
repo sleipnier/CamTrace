@@ -31,6 +31,8 @@ export interface JobSummary {
   completedAt?: string
   source: VideoMetadata
   progress: JobProgress
+  resultAvailable?: boolean
+  resultExpiresAt?: string
 }
 
 export interface JobDetail extends JobSummary {
@@ -38,6 +40,7 @@ export interface JobDetail extends JobSummary {
   frameId?: string
   lengthUnit?: 'reconstruction_unit' | 'meter'
   outputCount?: number
+  datasetJobId?: string
   error?: { code: string; message: string }
   artifacts: Array<{
     kind: 'dataset' | 'trajectory' | 'manifest'
@@ -82,6 +85,7 @@ export interface VisualizationJob {
   progressPercent: number
   previewUrl?: string
   downloadUrl?: string
+  error?: { code: string; message: string }
 }
 
 export interface ListJobsParams {
