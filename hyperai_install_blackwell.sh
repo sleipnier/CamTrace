@@ -6,6 +6,7 @@ PROJECT_ROOT="${VTC_PROJECT_ROOT:-${HOME_ROOT}/videotocamera}"
 MEGASAM_ROOT="${VTC_MEGASAM_ROOT:-${HOME_ROOT}/mega-sam}"
 MEGASAM_COMMIT="a27b4e633c5cc0828a62ed943ef9f6505705fd3f"
 DEPTH_SHA256="6c6a383e33e51c5fdfbf31e7ebcda943973a9e6a1cbef1564afe58d7f2e8fe63"
+export PYTHONUSERBASE="${VTC_PYTHONUSERBASE:-${HOME_ROOT}/.pylibs}"
 
 python - <<'PY'
 import sys
@@ -50,18 +51,18 @@ sed -i 's/\.type()/\.scalar_type()/g' \
   "${MEGASAM_ROOT}/base/thirdparty/lietorch/lietorch/src/lietorch_cpu.cpp" \
   "${MEGASAM_ROOT}/base/thirdparty/lietorch/lietorch/src/lietorch_gpu.cu"
 
-pip install \
+python -m pip install --user \
   numpy==1.26.3 opencv-python-headless==4.9.0.80 tqdm==4.67.1 \
   imageio==2.36.0 einops==0.8.0 scipy==1.14.1 matplotlib==3.9.2 \
   wandb==0.18.7 timm==1.0.7 ninja==1.11.1 huggingface-hub==0.36.0 \
-  kornia==0.7.4
-pip install torch-scatter -f https://data.pyg.org/whl/torch-2.8.0+cu128.html
-pip install xformers==0.0.32.post2 --index-url https://download.pytorch.org/whl/cu128
+  kornia==0.7.4 gradio==5.50.0
+python -m pip install --user torch-scatter -f https://data.pyg.org/whl/torch-2.8.0+cu128.html
+python -m pip install --user xformers==0.0.32.post2 --index-url https://download.pytorch.org/whl/cu128
 
 rm -rf "${MEGASAM_ROOT}/base/build" \
   "${MEGASAM_ROOT}/base/droid_backends.egg-info" \
   "${MEGASAM_ROOT}/base/lietorch.egg-info"
-(cd "${MEGASAM_ROOT}/base" && python setup.py install)
+(cd "${MEGASAM_ROOT}/base" && python setup.py install --user)
 
 curl -fsSL \
   https://raw.githubusercontent.com/facebookresearch/xformers/v0.0.24/xformers/components/attention/nystrom.py \
@@ -103,4 +104,4 @@ UniDepthV2.from_pretrained(
 print("RTX 5090 MegaSaM compatibility checks passed")
 PY
 
-python -m pip install -r "${PROJECT_ROOT}/requirements.txt"
+python -m pip install --user -r "${PROJECT_ROOT}/requirements.txt"

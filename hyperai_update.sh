@@ -26,11 +26,6 @@ git merge --ff-only "origin/${BRANCH}"
 
 # Keep the current service alive when a pull contains invalid Python.
 python -m py_compile api.py service.py video_to_camera.py
-command -v npm >/dev/null || {
-  echo "npm is required to rebuild the frontend." >&2
-  exit 1
-}
-(cd frontend && npm ci && npm run build)
 
 candidate_pids=""
 if [[ -f "${PID_FILE}" ]]; then
@@ -45,12 +40,12 @@ while read -r process_pid; do
   [[ -n "${process_pid}" ]] || continue
   process_cwd="$(readlink "/proc/${process_pid}/cwd" 2>/dev/null || true)"
   process_command="$(ps -p "${process_pid}" -o args= 2>/dev/null || true)"
-  if [[ "${process_cwd}" == "${PROJECT_REAL}" && "${process_command}" == *"uvicorn api:app"* ]] || \
-     [[ "${process_cwd}" == *"/${PROJECT_NAME}.pre-git-"* && "${process_command}" == *"uvicorn api:app"* ]] || \
-     [[ "${process_command}" == *"--app-dir ${PROJECT_ROOT}"* ]]; then
+  if [[ "${process_cwd}" == "${PROJECT_REAL}" && "${process_command}" == *"api.py"* ]] || \
+     [[ "${process_cwd}" == *"/${PROJECT_NAME}.pre-git-"* && "${process_command}" == *"api.py"* ]] || \
+     [[ "${process_command}" == *"${PROJECT_ROOT}/api.py"* ]]; then
     candidate_pids="${candidate_pids} ${process_pid}"
   fi
-done < <(pgrep -f 'python.*uvicorn.*api:app' || true)
+done < <(pgrep -f 'python.*[a]pi\.py' || true)
 
 for process_pid in $(printf '%s\n' ${candidate_pids} | sort -u); do
   if kill -0 "${process_pid}" 2>/dev/null; then
@@ -65,10 +60,22 @@ done
 nohup bash "${PROJECT_ROOT}/hyperai_start.sh" >"${LOG_FILE}" 2>&1 &
 new_pid=$!
 printf '%s\n' "${new_pid}" >"${PID_FILE}"
-sleep 3
 
-new_state="$(ps -p "${new_pid}" -o stat= 2>/dev/null || true)"
-if [[ -z "${new_state}" || "${new_state}" == Z* ]]; then
+ready=false
+for _ in {1..60}; do
+  new_state="$(ps -p "${new_pid}" -o stat= 2>/dev/null || true)"
+  if [[ -z "${new_state}" || "${new_state}" == Z* ]]; then
+    break
+  fi
+  if curl --fail --silent --show-error --max-time 2 \
+    "http://127.0.0.1:${VTC_PORT:-7860}/" >/dev/null; then
+    ready=true
+    break
+  fi
+  sleep 0.5
+done
+
+if [[ "${ready}" != true ]]; then
   echo "Web service failed to start. Check ${LOG_FILE}." >&2
   exit 1
 fi
