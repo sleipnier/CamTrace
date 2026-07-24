@@ -20,6 +20,62 @@ VIEW_SPECS = (
 )
 
 
+def estimate_view_target(trajectory: CameraTrajectory) -> tuple[np.ndarray, bool]:
+    """Estimate the common optical-axis intersection, with a finite fallback."""
+    positions = trajectory.positions
+    directions = np.asarray(
+        [quaternion_xyzw_to_matrix(quaternion)[:, 2] for quaternion in trajectory.quaternions_xyzw]
+    )
+    projectors = np.eye(3) - directions[:, :, None] * directions[:, None, :]
+    system = projectors.sum(axis=0)
+    right_hand_side = np.einsum("nij,nj->i", projectors, positions)
+    singular_values = np.linalg.eigvalsh(system)
+    candidate = np.linalg.lstsq(system, right_hand_side, rcond=None)[0]
+
+    offsets = candidate - positions
+    distances = np.linalg.norm(offsets, axis=1)
+    depths = np.einsum("ij,ij->i", directions, offsets)
+    span = float(np.max(np.ptp(positions, axis=0)))
+    scale = span if span > 0 else 1.0
+    relative_epsilon = scale * 1e-9
+    valid_distance = distances > relative_epsilon
+    angular_errors = np.full(len(positions), np.inf)
+    angular_errors[valid_distance] = np.arccos(
+        np.clip(depths[valid_distance] / distances[valid_distance], -1.0, 1.0)
+    )
+    well_conditioned = singular_values[-1] > 0 and singular_values[0] / singular_values[-1] >= 1e-4
+    reliable = bool(
+        well_conditioned
+        and np.all(depths > relative_epsilon)
+        and np.median(angular_errors) <= np.deg2rad(25)
+        and np.all(np.isfinite(candidate))
+    )
+    if reliable:
+        return candidate, True
+
+    average_direction = directions.mean(axis=0)
+    norm = np.linalg.norm(average_direction)
+    average_direction = average_direction / norm if norm > np.finfo(np.float64).eps else directions[0]
+    fallback_depth = span * 2.0 if span > 0 else 1.0
+    return np.median(positions, axis=0) + average_direction * fallback_depth, False
+
+
+def target_in_camera(
+    position: np.ndarray,
+    quaternion_xyzw: np.ndarray,
+    target: np.ndarray,
+) -> np.ndarray:
+    """Transform a parent-frame target into the OpenCV camera frame."""
+    origin = np.asarray(position, dtype=np.float64)
+    target_point = np.asarray(target, dtype=np.float64)
+    if origin.shape != (3,) or target_point.shape != (3,):
+        raise ValueError("Camera position and target must contain three values")
+    if not np.all(np.isfinite(origin)) or not np.all(np.isfinite(target_point)):
+        raise ValueError("Camera position and target must be finite")
+    rotation = quaternion_xyzw_to_matrix(quaternion_xyzw)
+    return rotation.T @ (target_point - origin)
+
+
 def playback_indexes(times_s: np.ndarray, fps: float, speed: float) -> np.ndarray:
     """Map fixed-rate video frames to the nearest source trajectory records."""
     times = np.asarray(times_s, dtype=np.float64)
@@ -120,9 +176,10 @@ def render_video(
     span = float(np.max(np.ptp(positions, axis=0)))
     camera_size = max(span * 0.075, 0.03)
     indexes = playback_indexes(trajectory.times_s, fps, speed)
+    view_target, target_reliable = estimate_view_target(trajectory)
 
     display_title = title or "Camera trajectory replay"
-    figure = plt.figure(figsize=(14, 8), facecolor="#08111f")
+    figure = plt.figure(figsize=(16, 9), facecolor="#08111f")
     figure.suptitle(
         display_title,
         color="#f8fafc",
@@ -138,10 +195,11 @@ def render_video(
             Line2D([0], [0], marker="o", color="none", markerfacecolor="#ef4444", label="End"),
             Line2D([0], [0], marker="o", color="none", markerfacecolor="#f59e0b", label="Current camera"),
             Line2D([0], [0], color="#f8fafc", linewidth=2, label="Viewing direction"),
+            Line2D([0], [0], marker="*", color="none", markerfacecolor="#d946ef", label="Target proxy"),
         ],
         loc="upper center",
         bbox_to_anchor=(0.5, 0.955),
-        ncol=6,
+        ncol=7,
         frameon=True,
         fontsize=8,
     )
@@ -152,7 +210,7 @@ def render_video(
     figure.text(
         0.5,
         0.015,
-        "Short axes: X red, Y green, Z blue. Camera-to-parent OpenCV pose - not a robot command",
+        "Target is inferred from optical axes, not object detection. X red, Y green, Z blue - not a robot command",
         ha="center",
         color="#94a3b8",
         fontsize=9,
@@ -160,7 +218,7 @@ def render_video(
 
     scenes = []
     for plot_number, (view_name, elevation, azimuth) in enumerate(VIEW_SPECS, start=1):
-        axis = figure.add_subplot(2, 2, plot_number, projection="3d", facecolor="#0f1b2d")
+        axis = figure.add_subplot(2, 3, plot_number, projection="3d", facecolor="#0f1b2d")
         axis.plot(
             positions[:, 0],
             positions[:, 1],
@@ -172,6 +230,7 @@ def render_video(
         progress_line, = axis.plot([], [], [], color="#38bdf8", linewidth=2.4)
         frustum_line, = axis.plot([], [], [], color="#f59e0b", linewidth=1.5)
         forward_line, = axis.plot([], [], [], color="#f8fafc", linewidth=2.0)
+        target_line, = axis.plot([], [], [], color="#d946ef", linewidth=1.0, linestyle="--", alpha=0.8)
         current_point, = axis.plot([], [], [], marker="o", color="#f59e0b", markersize=5)
         coordinate_lines = [
             axis.plot([], [], [], color=color, linewidth=2.0)[0]
@@ -179,6 +238,7 @@ def render_video(
         ]
         axis.scatter(*positions[0], color="#22c55e", s=24, depthshade=False)
         axis.scatter(*positions[-1], color="#ef4444", s=24, depthshade=False)
+        axis.scatter(*view_target, color="#d946ef", marker="*", s=60, depthshade=False)
         status = axis.text2D(0.03, 0.93, "", transform=axis.transAxes, color="#cbd5e1", fontsize=8)
 
         axis.set_title(view_name, color="#f8fafc", fontsize=11, pad=4)
@@ -191,10 +251,56 @@ def render_video(
             pane.set_facecolor((0.06, 0.11, 0.18, 1.0))
             pane.set_edgecolor("#334155")
         axis.view_init(elev=elevation, azim=azimuth)
-        _set_scene(axis, positions, camera_size)
-        scenes.append((progress_line, frustum_line, forward_line, current_point, coordinate_lines, status))
+        _set_scene(axis, np.vstack((positions, view_target)), camera_size)
+        scenes.append(
+            (progress_line, frustum_line, forward_line, target_line, current_point, coordinate_lines, status)
+        )
 
-    figure.subplots_adjust(left=0.02, right=0.98, bottom=0.07, top=0.89, wspace=0.02, hspace=0.16)
+    pov_axis = figure.add_subplot(2, 3, 5, facecolor="#0f1b2d")
+    pov_axis.set_title("Camera POV - target proxy", color="#f8fafc", fontsize=11, pad=4)
+    pov_axis.set_xlim(-1.25, 1.25)
+    pov_axis.set_ylim(0.9, -0.9)
+    pov_axis.set_aspect("equal")
+    pov_axis.axvline(0, color="#475569", linewidth=0.8)
+    pov_axis.axhline(0, color="#475569", linewidth=0.8)
+    pov_axis.grid(True, color="#334155", alpha=0.3)
+    pov_axis.tick_params(colors="#64748b", labelsize=7)
+    pov_axis.set_xlabel("normalized image X", color="#94a3b8", fontsize=8)
+    pov_axis.set_ylabel("normalized image Y (down)", color="#94a3b8", fontsize=8)
+    pov_target, = pov_axis.plot([], [], marker="*", color="#d946ef", markersize=14)
+    pov_status = pov_axis.text(
+        0.03, 0.95, "", transform=pov_axis.transAxes, va="top", color="#cbd5e1", fontsize=9
+    )
+
+    info_axis = figure.add_subplot(2, 3, 6, facecolor="#0f1b2d")
+    info_axis.axis("off")
+    confidence = "optical-axis convergence" if target_reliable else "low-confidence forward fallback"
+    info_axis.text(
+        0.04,
+        0.94,
+        "Estimated photographed target",
+        transform=info_axis.transAxes,
+        va="top",
+        color="#f8fafc",
+        fontsize=13,
+        fontweight="bold",
+    )
+    info_axis.text(
+        0.04,
+        0.82,
+        f"X  {view_target[0]: .4f}\nY  {view_target[1]: .4f}\nZ  {view_target[2]: .4f}\n"
+        f"unit  {trajectory.length_unit}\nquality  {confidence}\n\n"
+        "The purple star is a geometric proxy inferred\n"
+        "from camera optical axes. CSV data contains no\n"
+        "pixels, object labels, depth map, or point cloud.",
+        transform=info_axis.transAxes,
+        va="top",
+        color="#cbd5e1",
+        fontsize=10,
+        linespacing=1.55,
+    )
+
+    figure.subplots_adjust(left=0.035, right=0.985, bottom=0.07, top=0.89, wspace=0.13, hspace=0.18)
 
     def update(source_index: int) -> list[object]:
         origin = positions[source_index]
@@ -205,7 +311,7 @@ def render_video(
         )
         frustum = _frustum_polyline(origin, corners)
         updated = []
-        for progress, frustum_line, forward_line, point, coordinate_lines, status in scenes:
+        for progress, frustum_line, forward_line, target_line, point, coordinate_lines, status in scenes:
             progress.set_data_3d(
                 positions[: source_index + 1, 0],
                 positions[: source_index + 1, 1],
@@ -214,6 +320,11 @@ def render_video(
             frustum_line.set_data_3d(frustum[:, 0], frustum[:, 1], frustum[:, 2])
             forward_line.set_data_3d(
                 [origin[0], forward[0]], [origin[1], forward[1]], [origin[2], forward[2]]
+            )
+            target_line.set_data_3d(
+                [origin[0], view_target[0]],
+                [origin[1], view_target[1]],
+                [origin[2], view_target[2]],
             )
             point.set_data_3d([origin[0]], [origin[1]], [origin[2]])
             for endpoint, coordinate_line in zip(axis_endpoints, coordinate_lines):
@@ -224,7 +335,28 @@ def render_video(
                 f"frame {int(trajectory.frame_indexes[source_index])} / "
                 f"{int(trajectory.frame_indexes[-1])}    t={trajectory.times_s[source_index]:.2f}s"
             )
-            updated.extend((progress, frustum_line, forward_line, point, *coordinate_lines, status))
+            updated.extend(
+                (progress, frustum_line, forward_line, target_line, point, *coordinate_lines, status)
+            )
+
+        target_camera = target_in_camera(
+            origin,
+            trajectory.quaternions_xyzw[source_index],
+            view_target,
+        )
+        if target_camera[2] > 1e-9:
+            normalized_x = target_camera[0] / target_camera[2]
+            normalized_y = target_camera[1] / target_camera[2]
+            pov_target.set_data([normalized_x], [normalized_y])
+            visibility = "in front" if abs(normalized_x) <= 1.25 and abs(normalized_y) <= 0.9 else "outside virtual frame"
+            pov_status.set_text(
+                f"target: u={normalized_x:+.2f}, v={normalized_y:+.2f}\n"
+                f"depth={target_camera[2]:.3f} {trajectory.length_unit} ({visibility})"
+            )
+        else:
+            pov_target.set_data([], [])
+            pov_status.set_text("target proxy is behind this camera")
+        updated.extend((pov_target, pov_status))
         return updated
 
     destination.parent.mkdir(parents=True, exist_ok=True)

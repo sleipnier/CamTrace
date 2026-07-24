@@ -110,10 +110,13 @@ def create_app() -> gr.Blocks:
                 "<span style='color:#334155'>━</span> Full route / 完整路线　"
                 "<span style='color:#38bdf8'>━</span> Traveled route / 已行进路线　"
                 "<span style='color:#f59e0b'>●</span> Current camera / 当前镜头  \n"
+                "<span style='color:#d946ef'>★</span> Estimated target / 估算拍摄物　"
                 "White line / 白线: viewing direction / 镜头朝向。"
                 "Short axes / 短轴: <span style='color:#ef4444'>X red</span>, "
                 "<span style='color:#22c55e'>Y green</span>, "
-                "<span style='color:#3b82f6'>Z blue</span>."
+                "<span style='color:#3b82f6'>Z blue</span>.  \n"
+                "`Camera POV` shows the estimated target in normalized camera coordinates. "
+                "CSV has no pixels or object labels, so this is an optical-axis estimate, not object detection."
             )
             trajectory_file = gr.File(
                 label="Trajectory dataset / 轨迹数据",

@@ -121,7 +121,7 @@ python render_camera_trajectory_video.py camera_dataset_<job_id>.zip \
   --output camera_trajectory_multiview.mp4
 ```
 
-视频按数据集时间戳播放，用 `--speed 2` 可生成两倍速视频，`--fps 60` 可调整输出帧率。画面中的视锥和 XYZ 轴按 camera-to-parent 与 OpenCV optical 轴约定解释。数据不包含机械臂关节、连杆状态或相机到末端的手眼标定，因此视频只表示镜头运动，不能当作机械臂末端轨迹或可执行命令。
+视频按数据集时间戳播放，用 `--speed 2` 可生成两倍速视频，`--fps 60` 可调整输出帧率。画面中的视锥和 XYZ 轴按 camera-to-parent 与 OpenCV optical 轴约定解释。`Camera POV` 面板把所有镜头 +Z 光轴的最小二乘交会点标为紫色拍摄物代理；光轴无法可靠交会时会明确标为低置信度前向代理。CSV 不包含图像、物体标签、深度或点云，因此该标记不是物体检测结果。数据也不包含机械臂关节、连杆状态或相机到末端的手眼标定，不能当作机械臂末端轨迹或可执行命令。
 
 HyperAI Gradio 页面中的 `Visualize trajectory / 轨迹可视化` 页签提供相同功能。可以直接上传服务生成的 ZIP，或上传 `camera_trajectory.csv`、Cartesian JSON、PoseStamped JSONL，在线预览并下载 MP4。可视化输入限制为 25MB 和最多 1000 个位姿，生成结果沿用服务的自动过期清理策略。
 
