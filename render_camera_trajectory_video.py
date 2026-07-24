@@ -260,7 +260,7 @@ def render_video(
         if view_target.shape != (3,) or not np.all(np.isfinite(view_target)):
             raise ValueError("Manual target must contain three finite XYZ values")
         target_quality = "manual XYZ"
-    target_size = span * 0.12 if span > 0 else 0.12
+    target_size = span * 0.28 if span > 0 else 0.28
     target_mesh = asymmetric_target_mesh(view_target, target_size)
     target_points = np.vstack(target_mesh.faces)
 
