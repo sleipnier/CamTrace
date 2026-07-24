@@ -24,3 +24,8 @@ vtc-runtime/
 *.pid
 *.status
 current-gradio-requests.txt
+
+# Independent web frontend
+frontend/node_modules/
+frontend/dist/
+frontend/*.tsbuildinfo
