@@ -4,6 +4,7 @@ set -euo pipefail
 HOME_ROOT="${VTC_HOME:-/hyperai/home}"
 PROJECT_ROOT="${VTC_PROJECT_ROOT:-${HOME_ROOT}/videotocamera}"
 PROJECT_REAL="$(realpath "${PROJECT_ROOT}")"
+PROJECT_NAME="$(basename "${PROJECT_REAL}")"
 BRANCH="${VTC_UPDATE_BRANCH:-main}"
 PID_FILE="${VTC_PID_FILE:-${HOME_ROOT}/app.pid}"
 LOG_FILE="${VTC_LOG_FILE:-${HOME_ROOT}/app.log}"
@@ -40,7 +41,7 @@ while read -r process_pid; do
   process_cwd="$(readlink "/proc/${process_pid}/cwd" 2>/dev/null || true)"
   process_command="$(ps -p "${process_pid}" -o args= 2>/dev/null || true)"
   if [[ "${process_cwd}" == "${PROJECT_REAL}" && "${process_command}" == *"app.py"* ]] || \
-     [[ "${process_cwd}" == "${PROJECT_REAL}.pre-git-"* && "${process_command}" == *"app.py"* ]] || \
+     [[ "${process_cwd}" == *"/${PROJECT_NAME}.pre-git-"* && "${process_command}" == *"app.py"* ]] || \
      [[ "${process_command}" == *"${PROJECT_ROOT}/app.py"* ]]; then
     candidate_pids="${candidate_pids} ${process_pid}"
   fi
