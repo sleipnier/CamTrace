@@ -1,0 +1,26 @@
+.DS_Store
+.env
+.env.*
+!.env.example
+.opencode/
+.venv/
+__pycache__/
+*.py[cod]
+
+# Local media, generated datasets, and runtime state
+*.avi
+*.m4v
+*.mkv
+*.mov
+*.mp4
+*.webm
+*.zip
+camera_dataset_*/
+downloads/
+work/
+trajectory_output/
+vtc-runtime/
+*.log
+*.pid
+*.status
+current-gradio-requests.txt
