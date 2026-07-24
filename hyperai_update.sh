@@ -40,6 +40,7 @@ while read -r process_pid; do
   process_cwd="$(readlink "/proc/${process_pid}/cwd" 2>/dev/null || true)"
   process_command="$(ps -p "${process_pid}" -o args= 2>/dev/null || true)"
   if [[ "${process_cwd}" == "${PROJECT_REAL}" && "${process_command}" == *"app.py"* ]] || \
+     [[ "${process_cwd}" == "${PROJECT_REAL}.pre-git-"* && "${process_command}" == *"app.py"* ]] || \
      [[ "${process_command}" == *"${PROJECT_ROOT}/app.py"* ]]; then
     candidate_pids="${candidate_pids} ${process_pid}"
   fi
@@ -60,7 +61,8 @@ new_pid=$!
 printf '%s\n' "${new_pid}" >"${PID_FILE}"
 sleep 3
 
-if ! kill -0 "${new_pid}" 2>/dev/null; then
+new_state="$(ps -p "${new_pid}" -o stat= 2>/dev/null || true)"
+if [[ -z "${new_state}" || "${new_state}" == Z* ]]; then
   echo "Web service failed to start. Check ${LOG_FILE}." >&2
   exit 1
 fi
