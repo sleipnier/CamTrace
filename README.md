@@ -114,6 +114,15 @@ python visualize_camera_trajectory.py camera_dataset_<job_id>.zip \
 
 脚本也支持解压后的数据集目录，以及单独的 `camera_cartesian_trajectory.json`、`camera_pose_stamped.jsonl` 或 `camera_trajectory.csv`。通过 `--max-cameras 16` 调整显示的视锥数量，设为 `0` 则只显示轨迹。
 
+生成同步的透视、XY、XZ 和 YZ 投影视角轨迹视频：
+
+```bash
+python render_camera_trajectory_video.py camera_dataset_<job_id>.zip \
+  --output camera_trajectory_multiview.mp4
+```
+
+视频按数据集时间戳播放，用 `--speed 2` 可生成两倍速视频，`--fps 60` 可调整输出帧率。画面中的视锥和 XYZ 轴按 camera-to-parent 与 OpenCV optical 轴约定解释。数据不包含机械臂关节、连杆状态或相机到末端的手眼标定，因此视频只表示镜头运动，不能当作机械臂末端轨迹或可执行命令。
+
 `camera_pose_stamped.jsonl` 每行是一帧：
 
 ```json
