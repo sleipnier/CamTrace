@@ -103,6 +103,18 @@ def create_app() -> gr.Blocks:
                 "Upload a generated ZIP or `camera_trajectory.csv` to render Perspective, XY, XZ, "
                 "and YZ views. This shows camera motion only, not robot links or executable commands."
             )
+            gr.Markdown(
+                "**Legend / 图例**  \n"
+                "<span style='color:#22c55e'>●</span> Start / 起点　"
+                "<span style='color:#ef4444'>●</span> End / 终点　"
+                "<span style='color:#334155'>━</span> Full route / 完整路线　"
+                "<span style='color:#38bdf8'>━</span> Traveled route / 已行进路线　"
+                "<span style='color:#f59e0b'>●</span> Current camera / 当前镜头  \n"
+                "White line / 白线: viewing direction / 镜头朝向。"
+                "Short axes / 短轴: <span style='color:#ef4444'>X red</span>, "
+                "<span style='color:#22c55e'>Y green</span>, "
+                "<span style='color:#3b82f6'>Z blue</span>."
+            )
             trajectory_file = gr.File(
                 label="Trajectory dataset / 轨迹数据",
                 file_types=[".zip", ".csv", ".json", ".jsonl"],

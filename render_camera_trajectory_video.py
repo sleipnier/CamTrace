@@ -104,6 +104,7 @@ def render_video(
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
         from matplotlib.animation import FFMpegWriter, FuncAnimation, writers
+        from matplotlib.lines import Line2D
     except ImportError as error:
         raise RuntimeError("Matplotlib is required; install dependencies with: pip install -r requirements.txt") from error
 
@@ -127,12 +128,31 @@ def render_video(
         color="#f8fafc",
         fontsize=16,
         fontweight="bold",
-        y=0.975,
+        y=0.985,
     )
+    legend = figure.legend(
+        handles=[
+            Line2D([0], [0], color="#334155", linewidth=2, label="Full route"),
+            Line2D([0], [0], color="#38bdf8", linewidth=2.4, label="Traveled route"),
+            Line2D([0], [0], marker="o", color="none", markerfacecolor="#22c55e", label="Start"),
+            Line2D([0], [0], marker="o", color="none", markerfacecolor="#ef4444", label="End"),
+            Line2D([0], [0], marker="o", color="none", markerfacecolor="#f59e0b", label="Current camera"),
+            Line2D([0], [0], color="#f8fafc", linewidth=2, label="Viewing direction"),
+        ],
+        loc="upper center",
+        bbox_to_anchor=(0.5, 0.955),
+        ncol=6,
+        frameon=True,
+        fontsize=8,
+    )
+    legend.get_frame().set_facecolor("#0f1b2d")
+    legend.get_frame().set_edgecolor("#334155")
+    for text in legend.get_texts():
+        text.set_color("#cbd5e1")
     figure.text(
         0.5,
         0.015,
-        "Camera-to-parent pose, OpenCV optical axes (+X right, +Y down, +Z forward) - not a robot command",
+        "Short axes: X red, Y green, Z blue. Camera-to-parent OpenCV pose - not a robot command",
         ha="center",
         color="#94a3b8",
         fontsize=9,
@@ -174,7 +194,7 @@ def render_video(
         _set_scene(axis, positions, camera_size)
         scenes.append((progress_line, frustum_line, forward_line, current_point, coordinate_lines, status))
 
-    figure.subplots_adjust(left=0.02, right=0.98, bottom=0.07, top=0.92, wspace=0.02, hspace=0.16)
+    figure.subplots_adjust(left=0.02, right=0.98, bottom=0.07, top=0.89, wspace=0.02, hspace=0.16)
 
     def update(source_index: int) -> list[object]:
         origin = positions[source_index]
