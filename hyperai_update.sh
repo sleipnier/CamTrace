@@ -25,7 +25,12 @@ git fetch origin "${BRANCH}"
 git merge --ff-only "origin/${BRANCH}"
 
 # Keep the current service alive when a pull contains invalid Python.
-python -m py_compile app.py service.py video_to_camera.py
+python -m py_compile api.py service.py video_to_camera.py
+command -v npm >/dev/null || {
+  echo "npm is required to rebuild the frontend." >&2
+  exit 1
+}
+(cd frontend && npm ci && npm run build)
 
 candidate_pids=""
 if [[ -f "${PID_FILE}" ]]; then
@@ -40,12 +45,12 @@ while read -r process_pid; do
   [[ -n "${process_pid}" ]] || continue
   process_cwd="$(readlink "/proc/${process_pid}/cwd" 2>/dev/null || true)"
   process_command="$(ps -p "${process_pid}" -o args= 2>/dev/null || true)"
-  if [[ "${process_cwd}" == "${PROJECT_REAL}" && "${process_command}" == *"app.py"* ]] || \
-     [[ "${process_cwd}" == *"/${PROJECT_NAME}.pre-git-"* && "${process_command}" == *"app.py"* ]] || \
-     [[ "${process_command}" == *"${PROJECT_ROOT}/app.py"* ]]; then
+  if [[ "${process_cwd}" == "${PROJECT_REAL}" && "${process_command}" == *"uvicorn api:app"* ]] || \
+     [[ "${process_cwd}" == *"/${PROJECT_NAME}.pre-git-"* && "${process_command}" == *"uvicorn api:app"* ]] || \
+     [[ "${process_command}" == *"--app-dir ${PROJECT_ROOT}"* ]]; then
     candidate_pids="${candidate_pids} ${process_pid}"
   fi
-done < <(pgrep -f 'python.*[a]pp\.py' || true)
+done < <(pgrep -f 'python.*uvicorn.*api:app' || true)
 
 for process_pid in $(printf '%s\n' ${candidate_pids} | sort -u); do
   if kill -0 "${process_pid}" 2>/dev/null; then

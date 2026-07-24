@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-import fcntl
+try:
+    import fcntl
+except ModuleNotFoundError:  # Allows API/import tooling on Windows; GPU execution remains Linux-only.
+    fcntl = None  # type: ignore[assignment]
 import csv
 import hashlib
 import json
@@ -130,6 +133,7 @@ def inspect_video(video: Path, config: ServiceConfig) -> dict[str, object]:
         duration = float(payload["format"]["duration"])
         width = int(stream["width"])
         height = int(stream["height"])
+        fps = float(Fraction(stream["avg_frame_rate"]))
         frame_value = stream.get("nb_read_frames") or stream.get("nb_frames")
         if frame_value in (None, "N/A"):
             frame_count = round(duration * float(Fraction(stream["avg_frame_rate"])))
@@ -149,6 +153,7 @@ def inspect_video(video: Path, config: ServiceConfig) -> dict[str, object]:
         "width": width,
         "height": height,
         "frame_count": frame_count,
+        "fps": fps,
     }
 
 
@@ -167,6 +172,8 @@ def _clean_megasam_artifacts(root: Path, scene: str) -> None:
 
 
 def run_pipeline(config: ServiceConfig, task_root: Path, video: Path, scene: str) -> None:
+    if fcntl is None:
+        raise ServiceError("GPU reconstruction requires a Linux host with fcntl support")
     log_path = task_root / "pipeline.log"
     command = [
         sys.executable,

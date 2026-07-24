@@ -1,32 +1,162 @@
-# Video to Camera Motion
+# CAM//TRACE — Video to Camera Motion
 
-输入普通视频，调用 MegaSaM 重建逐帧相机运动，并导出统一的笛卡尔位姿数据。时间单位为秒、姿态为 Quaternion `x,y,z,w`。未经外部尺度标定时，长度明确标为 `reconstruction_unit`，不会冒充物理米。
+CAM//TRACE 从普通视频中重建逐帧相机运动，并在浏览器中交互式展示三维轨迹。前端、HTTP API 与 GPU 算法完全分层；页面展示的文件参数、任务状态、XYZ 和四元数均来自真实服务端与 MegaSaM 输出，不包含 Mock 数据。
 
-## 环境
+## 系统结构
 
-完整重建应在 NVIDIA GPU Linux 主机上运行。MegaSaM 官方环境依赖 Python 3.10、CUDA 11.8、PyTorch 2.0.1、Depth Anything、UniDepth 和 CUDA 扩展。此工具不修改 MegaSaM，也不会在不支持 CUDA 的 macOS 上模拟运行。
+```text
+frontend/ (React + TypeScript + Three.js)
+        │ /api
+        ▼
+api.py (FastAPI)
+        │
+        ├── ffprobe：真实视频参数
+        ├── service.py：任务隔离、校验、队列与打包
+        ├── video_to_camera.py：MegaSaM 重建与轨迹导出
+        └── render_camera_trajectory_video.py：多视角 MP4
+```
 
-本工具自身只需要：
+完整接口和设备数据约定见 [API_AND_DEVICE_PROTOCOL.md](API_AND_DEVICE_PROTOCOL.md)，输出字段见 [OUTPUT_FORMAT.md](OUTPUT_FORMAT.md)。
+
+## 环境要求
+
+真实重建必须运行在 NVIDIA GPU Linux 主机：
+
+- Python 3.10
+- NVIDIA GPU
+- MegaSaM 及其模型
+- CUDA 11.8 + PyTorch 2.0.1（RTX 3090 官方环境）
+- CUDA 12.8 + PyTorch 2.8（RTX 5090 适配环境）
+- ffmpeg / ffprobe
+- Node.js 20+ 与 npm（构建前端）
+
+Windows 可用于开发和构建前端，但不能运行依赖 `fcntl`、CUDA 扩展和 MegaSaM 的真实 GPU 重建。
+
+## 安装
+
+### 1. Python API 依赖
 
 ```bash
 python -m pip install -r requirements.txt
 ```
 
-系统还需安装 `ffmpeg` 和 `ffprobe`。
+### 2. 前端依赖与构建
 
-## HyperAI 视频上传服务
+```bash
+cd frontend
+npm ci
+npm run build
+cd ..
+```
 
-官方环境推荐 RTX 3090、CUDA 11.8 和 PyTorch 2.0.1，使用 `hyperai_install.sh`。RTX 5090 必须选择 HyperAI PyTorch 2.8 GPU 镜像，并使用经过实机验证的 `hyperai_install_blackwell.sh` 将扩展移植到 CUDA 12.8 / `sm_120`；不能在 5090 上运行官方 CUDA 11.8 二进制。
+生产构建输出到 `frontend/dist`，FastAPI 会自动托管这个目录。
 
-HyperAI 配置：
+### 3. MegaSaM / HyperAI
 
-1. 将本项目放在 `/hyperai/home/videotocamera`。
-2. 将容器端口 `7860` 映射为 `vtc-gradio`。
-3. 根据 `hyperai.env.example` 配置普通环境变量，并把 `VTC_AUTH_PASSWORD` 配置为 Secret。
-4. RTX 3090 运行 `hyperai_install.sh`；RTX 5090 运行 `hyperai_install_blackwell.sh`。
-5. 运行 `bash /hyperai/home/videotocamera/hyperai_start.sh` 启动上传界面。
+将仓库放在：
 
-每个上传任务使用随机 UUID scene 和独立工作目录；跨进程文件锁确保单张 GPU 同时只执行一个任务。服务默认限制为 200MB、60 秒、8-1000 帧和 3840x2160。成功后下载的 ZIP 包含：
+```text
+/hyperai/home/videotocamera
+```
+
+RTX 3090：
+
+```bash
+bash /hyperai/home/videotocamera/hyperai_install.sh
+```
+
+RTX 5090 / Blackwell：
+
+```bash
+bash /hyperai/home/videotocamera/hyperai_install_blackwell.sh
+```
+
+安装脚本会准备 MegaSaM、Depth Anything、UniDepth 和 CUDA 扩展。前端仍需使用 Node.js 单独执行 `npm ci && npm run build`。
+
+## 配置
+
+参考 [hyperai.env.example](hyperai.env.example)：
+
+```bash
+export VTC_PROJECT_ROOT=/hyperai/home/videotocamera
+export VTC_MEGASAM_ROOT=/hyperai/home/mega-sam
+export VTC_RUNTIME_ROOT=/hyperai/home/vtc-runtime
+export VTC_GPU=0
+export VTC_HOST=0.0.0.0
+export VTC_PORT=7860
+export VTC_AUTH_USER=your-user
+export VTC_AUTH_PASSWORD=your-secret
+```
+
+生产环境必须设置用户名和强密码。未配置认证时，API 只适合本机开发，不能暴露到公网。
+
+主要限制：
+
+| 配置 | 默认值 |
+| --- | --- |
+| `VTC_MAX_UPLOAD_MB` | 200 MB |
+| `VTC_MAX_DURATION_SECONDS` | 60 秒 |
+| `VTC_MIN_FRAMES` | 8 |
+| `VTC_MAX_FRAMES` | 1000 |
+| `VTC_MAX_WIDTH` / `VTC_MAX_HEIGHT` | 3840 / 2160 |
+| `VTC_JOB_TIMEOUT_SECONDS` | 1800 秒 |
+| `VTC_RESULT_TTL_SECONDS` | 3600 秒 |
+
+## 启动方式
+
+### 生产 / HyperAI 一体化启动
+
+确认已经构建 `frontend/dist` 后：
+
+```bash
+bash /hyperai/home/videotocamera/hyperai_start.sh
+```
+
+默认访问：
+
+```text
+http://<server>:7860
+```
+
+健康检查：
+
+```bash
+curl http://127.0.0.1:7860/api/health
+```
+
+### 前后端分离开发
+
+终端 1，启动真实 API：
+
+```bash
+python -m uvicorn api:app --host 127.0.0.1 --port 8000 --reload
+```
+
+终端 2，启动 Vite：
+
+```bash
+cd frontend
+npm run dev
+```
+
+访问 `http://localhost:5173`。Vite 会把 `/api` 代理到 `http://localhost:8000`。
+
+注意：真实视频重建仍要求终端 1 位于已经配置 MegaSaM 的 Linux GPU 环境中。前端不再提供离线 Mock 回退；API 不可用时会明确显示请求失败。
+
+## 页面使用方式
+
+1. 打开 CAM//TRACE 单页工作区。
+2. 将视频拖入“上传一个视频”，或点击选择文件。
+3. 点击“开始解析与重建”。
+4. 右侧参数来自服务端 `ffprobe`；解析前字段显示 Loading。
+5. 等待任务依次经过校验、GPU 排队、MegaSaM 重建、轨迹验证和打包。
+6. 完成后，同一主体区域自动显示 Three.js 三维轨迹。
+7. 拖动轨迹画布旋转，使用时间轴、播放和倍速控制逐帧检查。
+8. 右侧读取当前算法帧的 XYZ 与 `x,y,z,w` 四元数。
+9. 页面下方任务队列可重新打开历史任务。
+10. 也可使用“导入已有轨迹”读取服务生成的 ZIP、CSV、JSON 或 JSONL。
+
+服务返回的数据集包含：
 
 ```text
 camera_pose_stamped.jsonl
@@ -35,21 +165,9 @@ camera_cartesian_trajectory.json
 manifest.json
 ```
 
-`manifest.json` 记录输入及输出 SHA-256、视频属性、任务 ID 和安全状态。成功或失败后都会清理大型中间文件，只保留最终 ZIP。服务强制启用 Gradio 用户名和密码，不应匿名暴露端口映射 URL。
+## 命令行使用
 
-### 从 GitHub 更新 Web 页面
-
-网页和服务代码由 GitHub `main` 分支维护。队友提交并合并修改后，在 HyperAI 终端运行：
-
-```bash
-bash /hyperai/home/videotocamera/hyperai_update.sh
-```
-
-脚本只接受 fast-forward 更新，容器中存在未提交修改时会拒绝覆盖。拉取后会先检查 Python 语法，再重启 Gradio；运行日志写入 `/hyperai/home/app.log`。
-
-## 一条命令处理视频
-
-先按照 MegaSaM 官方 README 安装仓库和模型，再在它的 Conda 环境中执行：
+不启动 Web 服务时，也可以直接运行算法：
 
 ```bash
 python video_to_camera.py all dance.mp4 \
@@ -59,17 +177,7 @@ python video_to_camera.py all dance.mp4 \
   --output-dir output/dance
 ```
 
-命令依次执行：
-
-1. 从第一条视频流保留每一帧，并读取逐帧 PTS 和平均 FPS。
-2. 调用 Depth Anything 生成相对深度。
-3. 调用 UniDepth 生成度量深度。
-4. 调用 MegaSaM 生成 `cam_c2w`。
-5. 校验抽帧数与 `cam_c2w` 数量一致，将首帧归一化为原点并导出轨迹。
-
-同一个 `--scene` 的帧、深度、重建或最终 NPZ 产物只要已经存在，命令就会拒绝继续，避免静默混入旧结果。MegaSaM 的 NPZ 最多导出 1000 帧，因此更长的视频必须先切段。
-
-如果已经取得 `outputs/dance_droid.npz`，可以只做导出：
+已有 MegaSaM NPZ 时只导出：
 
 ```bash
 python video_to_camera.py export outputs/dance_droid.npz \
@@ -77,7 +185,7 @@ python video_to_camera.py export outputs/dance_droid.npz \
   --output-dir output/dance
 ```
 
-如果通过已知距离标定得到 `1 reconstruction_unit = 0.42 m`，加入：
+提供外部尺度标定：
 
 ```bash
 python video_to_camera.py export outputs/dance_droid.npz \
@@ -86,88 +194,51 @@ python video_to_camera.py export outputs/dance_droid.npz \
   --output-dir output/dance
 ```
 
-也可以不用源视频而显式指定帧率：
-
-```bash
-python video_to_camera.py export outputs/dance_droid.npz --fps 30
-```
-
-显式 `--fps` 会生成均匀合成时间；提供 `--video` 时则使用源视频逐帧 PTS，并要求视频帧数和 NPZ 位姿数完全一致。三个目标文件默认不覆盖；确认目标是当前任务的旧导出后可显式加入 `--force`。
-
-## 输出
-
-完整的数据结构、字段定义、坐标约定和校验方式见 [`OUTPUT_FORMAT.md`](OUTPUT_FORMAT.md)。
-
-使用 Matplotlib 直接查看下载数据集的三维相机路径：
+离线查看轨迹：
 
 ```bash
 python visualize_camera_trajectory.py camera_dataset_<job_id>.zip
 ```
 
-蓝线是相机路径，绿点和红点分别是起点和终点，灰色线框是抽样相机视锥，橙线是镜头朝向。鼠标可以旋转和缩放视图。保存图片而不打开窗口：
-
-```bash
-python visualize_camera_trajectory.py camera_dataset_<job_id>.zip \
-  --save camera_trajectory.png \
-  --no-show
-```
-
-脚本也支持解压后的数据集目录，以及单独的 `camera_cartesian_trajectory.json`、`camera_pose_stamped.jsonl` 或 `camera_trajectory.csv`。通过 `--max-cameras 16` 调整显示的视锥数量，设为 `0` 则只显示轨迹。
-
-生成同步的透视、XY、XZ 和 YZ 投影视角轨迹视频：
+生成多视角轨迹视频：
 
 ```bash
 python render_camera_trajectory_video.py camera_dataset_<job_id>.zip \
   --output camera_trajectory_multiview.mp4
 ```
 
-视频按数据集时间戳播放，用 `--speed 2` 可生成两倍速视频，`--fps 60` 可调整输出帧率。画面中的视锥和 XYZ 轴按 camera-to-parent 与 OpenCV optical 轴约定解释。`Camera POV` 面板投影一个完全由 Python 几何构造的固定不对称目标：红色鼻锥定义正面，粉色侧翼和偏心绿色天线用于区分侧面和背面，适合检查 360 度环绕运镜。目标中心默认取所有镜头 +Z 光轴的最小二乘交会点；也可通过 CLI `--target X Y Z` 或网页输入完整 XYZ。CSV 不包含真实图像、物体标签、深度或点云，因此模型不是物体检测或生成式视频结果。数据也不包含机械臂关节、连杆状态或相机到末端的手眼标定，不能当作机械臂末端轨迹或可执行命令。
+## 测试与构建验证
 
-HyperAI Gradio 页面中的 `Visualize trajectory / 轨迹可视化` 页签提供相同功能。可以直接上传服务生成的 ZIP，或上传 `camera_trajectory.csv`、Cartesian JSON、PoseStamped JSONL，在线预览并下载 MP4。可视化输入限制为 25MB 和最多 1000 个位姿，生成结果沿用服务的自动过期清理策略。
+Python：
 
-`camera_pose_stamped.jsonl` 每行是一帧：
+```bash
+python -m unittest discover -s tests -v
+python -m py_compile api.py service.py video_to_camera.py
+```
+
+前端：
+
+```bash
+cd frontend
+npm run build
+```
+
+## 更新部署
+
+拉取并重启：
+
+```bash
+bash /hyperai/home/videotocamera/hyperai_update.sh
+```
+
+脚本只接受 fast-forward 更新，存在未提交文件时拒绝覆盖；拉取后会检查 Python 语法、执行 `npm ci && npm run build`，全部成功后才停止旧服务并启动新版本。
+
+## 设备安全
+
+输出是单目相机重建轨迹，不是机械臂末端轨迹或可执行命令。未标定时长度单位为 `reconstruction_unit`，而不是米；时间是视频相对时间，而不是 ROS clock。投入设备前必须完成尺度标定、坐标变换、手眼标定、轨迹平滑、速度/加速度限制、碰撞检查和低速验证。
+
+所有原始输出固定包含：
 
 ```json
-{"schema":"camera_pose_stamped/v2","message_compatibility":"geometry_msgs/PoseStamped","frame_index":0,"time_from_start_s":0.0,"timestamp_quality":"source_frame_pts","stamp_basis":"media_time_from_start_not_ros_clock","length_unit":"reconstruction_unit","coordinate_domain":"camera_reconstruction","robot_execution_ready":false,"header":{"stamp":{"sec":0,"nanosec":0},"frame_id":"reconstruction_camera0"},"pose":{"position":{"x":0.0,"y":0.0,"z":0.0},"orientation":{"x":0.0,"y":0.0,"z":0.0,"w":1.0}}}
+{"robot_execution_ready": false}
 ```
-
-`camera_trajectory.csv` 适合数据处理和绘图：
-
-```text
-frame,time_from_start_s,timestamp_quality,frame_id,length_unit,coordinate_domain,robot_execution_ready,x,y,z,qx,qy,qz,qw
-```
-
-`camera_cartesian_trajectory.json` 是带时间戳的离散笛卡尔位姿序列，不定义插值、速度或加速度：
-
-```json
-{
-  "type": "cartesian_trajectory",
-  "frame_id": "reconstruction_camera0",
-  "coordinate_domain": "camera_reconstruction",
-  "robot_execution_ready": false,
-  "units": {
-    "length": "reconstruction_unit",
-    "orientation": "unit_quaternion_xyzw",
-    "time": "second"
-  },
-  "points": []
-}
-```
-
-## 坐标与机械臂
-
-默认导出计算 `inverse(reconstruction_world_T_camera0) * reconstruction_world_T_camera_i`，因此父坐标系明确命名为 `reconstruction_camera0`；使用 `--keep-first-pose` 时才保留原始 `reconstruction_world_raw`。两者都不是机械臂 `world` 中可直接执行的末端轨迹，CLI 不允许只靠重命名把它伪装成机器人坐标系。投入机械臂前必须完成以下处理：
-
-1. 标定 `robot_world_T_reconstruction_world`，解决相机坐标轴与机器人坐标轴的方向差异。
-2. 根据实测距离校正单目重建尺度，不能把 MegaSaM 的尺度当作测量真值。
-3. 计算工具初始位姿偏置，把相机姿态变化映射到末端姿态，而不是把相机绝对姿态直接覆盖到工具。
-4. 重采样并平滑轨迹，限制速度、加速度、工作空间和奇异点。
-5. 先在仿真和低速模式检查碰撞，再向 `move_to_pose` 或机器人轨迹控制器发送目标。
-
-`--video` 模式使用 `best_effort_timestamp_time`，并拒绝缺失、非有限或非递增 PTS。只有显式 `--fps` 模式使用 `frame / fps`，其时间质量会标为 `synthetic_uniform_fps`，不能视为执行级时钟。
-
-JSONL 的 `header.stamp` 是为了兼容 `geometry_msgs/PoseStamped` 字段布局而表达的媒体相对时间，不是 ROS clock 时间点；未标定时平移也不是 ROS 默认假定的米。转换为 ROS 消息前必须先完成时间映射和尺度标定。
-
-导出会先在同一父目录完整生成 staging 文件，再发布三个目标，但文件系统无法将三个独立文件作为一个事务原子替换。不要在其他不可信进程可修改的共享输出目录中运行；消费者应在生产者退出成功后再读取整组文件。
-
-MegaSaM 的便捷 NPZ 最多包含 1000 帧。本工具当前有意只读取明确的 `cam_c2w`，不会猜测 `poses.npy` 的 SE(3) 约定；长视频应先切段。

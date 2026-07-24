@@ -54,7 +54,7 @@ pip install \
   numpy==1.26.3 opencv-python-headless==4.9.0.80 tqdm==4.67.1 \
   imageio==2.36.0 einops==0.8.0 scipy==1.14.1 matplotlib==3.9.2 \
   wandb==0.18.7 timm==1.0.7 ninja==1.11.1 huggingface-hub==0.36.0 \
-  kornia==0.7.4 gradio==5.50.0
+  kornia==0.7.4
 pip install torch-scatter -f https://data.pyg.org/whl/torch-2.8.0+cu128.html
 pip install xformers==0.0.32.post2 --index-url https://download.pytorch.org/whl/cu128
 

@@ -1,15 +1,17 @@
-import { Box, Menu, Plus, Route as RouteIcon, X } from 'lucide-react'
+import { Menu, X } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
 import { NavLink } from 'react-router-dom'
-
-const navItems = [
-  { to: '/', label: '工作台', icon: Box, end: true },
-  { to: '/jobs/new', label: '新建重建', icon: Plus },
-  { to: '/trajectory', label: '轨迹查看器', icon: RouteIcon },
-]
+import { useQuery } from '@tanstack/react-query'
+import { request } from '../api/http'
 
 export function AppShell({ children }: { children: ReactNode }) {
   const [open, setOpen] = useState(false)
+  const health = useQuery({
+    queryKey: ['api-health'],
+    queryFn: () => request<{ status: string }>('/health'),
+    refetchInterval: 15_000,
+    retry: false,
+  })
   return (
     <div className="app-shell">
       <header className="topbar">
@@ -17,14 +19,12 @@ export function AppShell({ children }: { children: ReactNode }) {
           <span className="brand-mark">C//T</span>
           <span>CAM//TRACE</span>
         </NavLink>
-        <nav className={open ? 'nav nav-open' : 'nav'} aria-label="主导航">
-          {navItems.map(({ to, label, icon: Icon, end }) => (
-            <NavLink key={to} to={to} end={end} onClick={() => setOpen(false)}>
-              <Icon size={18} strokeWidth={3} /> {label}
-            </NavLink>
-          ))}
+        <nav className={open ? 'nav nav-open' : 'nav'} aria-label="页面导航">
+          <a href="#workspace" onClick={() => setOpen(false)}>开始重建</a>
+          <a href="#queue" onClick={() => setOpen(false)}>任务队列</a>
+          <a href="#about" onClick={() => setOpen(false)}>数据说明</a>
         </nav>
-        <div className="system-badge"><i /> MOCK SYSTEM</div>
+        <div className={`system-badge ${health.isError ? 'system-offline' : ''}`}><i /> {health.data?.status === 'ok' ? 'API ONLINE' : health.isError ? 'API OFFLINE' : 'API CHECKING'}</div>
         <button className="menu-button" onClick={() => setOpen(!open)} aria-label="切换导航">
           {open ? <X /> : <Menu />}
         </button>
@@ -33,7 +33,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       <footer>
         <strong>CAM//TRACE © 2026</strong>
         <span>CAMERA MOTION, MADE VISIBLE.</span>
-        <span>API MODE: MOCK</span>
+        <span>DATA SOURCE: MEGASAM</span>
       </footer>
     </div>
   )

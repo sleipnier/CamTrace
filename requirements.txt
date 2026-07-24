@@ -1,3 +1,5 @@
 numpy==1.26.3
-gradio==5.50.0
 matplotlib==3.8.2
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+python-multipart==0.0.20

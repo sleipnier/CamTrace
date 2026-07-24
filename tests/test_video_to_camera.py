@@ -141,7 +141,10 @@ class TrajectoryExportTest(unittest.TestCase):
             victim.write_text("safe")
             csv_path = root / "out" / "camera_trajectory.csv"
             csv_path.unlink()
-            os.symlink(victim, csv_path)
+            try:
+                os.symlink(victim, csv_path)
+            except OSError as error:
+                self.skipTest(f"Symbolic links are not available in this environment: {error}")
             with self.assertRaisesRegex(FileExistsError, "non-regular"):
                 export_trajectory(root / "track.npz", root / "out", 30.0, force=True)
             self.assertEqual(victim.read_text(), "safe")
