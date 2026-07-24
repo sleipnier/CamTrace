@@ -38,7 +38,8 @@ def playback_indexes(times_s: np.ndarray, fps: float, speed: float) -> np.ndarra
         return np.array([len(times) - 1], dtype=np.int64)
 
     video_duration = duration / speed
-    sample_times = np.arange(math.ceil(video_duration * fps), dtype=np.float64) / fps * speed
+    interval_count = math.ceil(video_duration * fps - 1e-9 * max(1.0, video_duration * fps))
+    sample_times = np.arange(interval_count, dtype=np.float64) / fps * speed
     sample_times = np.append(sample_times, duration)
     right = np.searchsorted(relative_times, sample_times, side="left")
     right = np.clip(right, 0, len(times) - 1)
