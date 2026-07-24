@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import math
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -18,6 +19,134 @@ VIEW_SPECS = (
     ("XZ projection", 0, -90),
     ("YZ projection", 0, 0),
 )
+
+
+@dataclass(frozen=True)
+class TargetMesh:
+    faces: tuple[np.ndarray, ...]
+    colors: tuple[str, ...]
+    center: np.ndarray
+    front_tip: np.ndarray
+
+
+def asymmetric_target_mesh(center: np.ndarray, size: float) -> TargetMesh:
+    """Build a fixed, strongly asymmetric low-poly reference object."""
+    origin = np.asarray(center, dtype=np.float64)
+    if origin.shape != (3,) or not np.all(np.isfinite(origin)):
+        raise ValueError("Target center must contain three finite values")
+    if not np.isfinite(size) or size <= 0:
+        raise ValueError("Target size must be finite and greater than zero")
+
+    faces: list[np.ndarray] = []
+    colors: list[str] = []
+
+    def add_box(minimum: tuple[float, float, float], maximum: tuple[float, float, float], color: str) -> None:
+        x0, y0, z0 = minimum
+        x1, y1, z1 = maximum
+        vertices = np.array(
+            [
+                [x0, y0, z0], [x1, y0, z0], [x1, y1, z0], [x0, y1, z0],
+                [x0, y0, z1], [x1, y0, z1], [x1, y1, z1], [x0, y1, z1],
+            ],
+            dtype=np.float64,
+        )
+        for indexes in ((0, 1, 2, 3), (4, 7, 6, 5), (0, 4, 5, 1), (1, 5, 6, 2), (2, 6, 7, 3), (3, 7, 4, 0)):
+            faces.append(origin + vertices[list(indexes)] * size)
+            colors.append(color)
+
+    add_box((-0.50, -0.34, -0.38), (0.45, 0.34, 0.34), "#0891b2")
+    add_box((-0.22, -0.23, 0.34), (0.24, 0.18, 0.72), "#f59e0b")
+    add_box((-0.38, 0.34, -0.12), (0.12, 0.56, 0.22), "#ec4899")
+    add_box((-0.18, 0.07, 0.72), (-0.07, 0.18, 1.06), "#22c55e")
+
+    base = np.array(
+        [[0.45, -0.22, -0.18], [0.45, 0.22, -0.18], [0.45, 0.22, 0.22], [0.45, -0.22, 0.22]]
+    )
+    tip = np.array([0.92, 0.0, 0.0])
+    faces.append(origin + base * size)
+    colors.append("#dc2626")
+    for index in range(4):
+        faces.append(origin + np.vstack((base[index], base[(index + 1) % 4], tip)) * size)
+        colors.append("#ef4444")
+
+    return TargetMesh(
+        faces=tuple(faces),
+        colors=tuple(colors),
+        center=origin,
+        front_tip=origin + tip * size,
+    )
+
+
+def estimate_view_target(trajectory: CameraTrajectory) -> tuple[np.ndarray, bool]:
+    """Estimate the common optical-axis intersection, with a finite fallback."""
+    positions = trajectory.positions
+    directions = np.asarray(
+        [quaternion_xyzw_to_matrix(quaternion)[:, 2] for quaternion in trajectory.quaternions_xyzw]
+    )
+    projectors = np.eye(3) - directions[:, :, None] * directions[:, None, :]
+    system = projectors.sum(axis=0)
+    right_hand_side = np.einsum("nij,nj->i", projectors, positions)
+    singular_values = np.linalg.eigvalsh(system)
+    candidate = np.linalg.lstsq(system, right_hand_side, rcond=None)[0]
+
+    offsets = candidate - positions
+    distances = np.linalg.norm(offsets, axis=1)
+    depths = np.einsum("ij,ij->i", directions, offsets)
+    span = float(np.max(np.ptp(positions, axis=0)))
+    scale = span if span > 0 else 1.0
+    relative_epsilon = scale * 1e-9
+    valid_distance = distances > relative_epsilon
+    angular_errors = np.full(len(positions), np.inf)
+    angular_errors[valid_distance] = np.arccos(
+        np.clip(depths[valid_distance] / distances[valid_distance], -1.0, 1.0)
+    )
+    well_conditioned = singular_values[-1] > 0 and singular_values[0] / singular_values[-1] >= 1e-4
+    reliable = bool(
+        well_conditioned
+        and np.all(depths > relative_epsilon)
+        and np.median(angular_errors) <= np.deg2rad(25)
+        and np.all(np.isfinite(candidate))
+    )
+    if reliable:
+        return candidate, True
+
+    average_direction = directions.mean(axis=0)
+    norm = np.linalg.norm(average_direction)
+    average_direction = average_direction / norm if norm > np.finfo(np.float64).eps else directions[0]
+    fallback_depth = span * 2.0 if span > 0 else 1.0
+    return np.median(positions, axis=0) + average_direction * fallback_depth, False
+
+
+def target_in_camera(
+    position: np.ndarray,
+    quaternion_xyzw: np.ndarray,
+    target: np.ndarray,
+) -> np.ndarray:
+    """Transform a parent-frame target into the OpenCV camera frame."""
+    origin = np.asarray(position, dtype=np.float64)
+    target_point = np.asarray(target, dtype=np.float64)
+    if origin.shape != (3,) or target_point.shape != (3,):
+        raise ValueError("Camera position and target must contain three values")
+    if not np.all(np.isfinite(origin)) or not np.all(np.isfinite(target_point)):
+        raise ValueError("Camera position and target must be finite")
+    rotation = quaternion_xyzw_to_matrix(quaternion_xyzw)
+    return rotation.T @ (target_point - origin)
+
+
+def points_in_camera(
+    position: np.ndarray,
+    quaternion_xyzw: np.ndarray,
+    points: np.ndarray,
+) -> np.ndarray:
+    """Transform parent-frame points into the OpenCV camera frame."""
+    origin = np.asarray(position, dtype=np.float64)
+    world_points = np.asarray(points, dtype=np.float64)
+    if origin.shape != (3,) or world_points.ndim != 2 or world_points.shape[1] != 3:
+        raise ValueError("Expected camera position (3,) and points (N, 3)")
+    if not np.all(np.isfinite(origin)) or not np.all(np.isfinite(world_points)):
+        raise ValueError("Camera position and points must be finite")
+    rotation = quaternion_xyzw_to_matrix(quaternion_xyzw)
+    return (world_points - origin) @ rotation
 
 
 def playback_indexes(times_s: np.ndarray, fps: float, speed: float) -> np.ndarray:
@@ -97,6 +226,7 @@ def render_video(
     speed: float = 1.0,
     dpi: int = 120,
     title: str | None = None,
+    target_xyz: np.ndarray | None = None,
 ) -> Path:
     try:
         import matplotlib
@@ -104,7 +234,9 @@ def render_video(
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
         from matplotlib.animation import FFMpegWriter, FuncAnimation, writers
+        from matplotlib.patches import Polygon
         from matplotlib.lines import Line2D
+        from mpl_toolkits.mplot3d.art3d import Poly3DCollection
     except ImportError as error:
         raise RuntimeError("Matplotlib is required; install dependencies with: pip install -r requirements.txt") from error
 
@@ -120,9 +252,20 @@ def render_video(
     span = float(np.max(np.ptp(positions, axis=0)))
     camera_size = max(span * 0.075, 0.03)
     indexes = playback_indexes(trajectory.times_s, fps, speed)
+    if target_xyz is None:
+        view_target, target_reliable = estimate_view_target(trajectory)
+        target_quality = "optical-axis convergence" if target_reliable else "low-confidence forward fallback"
+    else:
+        view_target = np.asarray(target_xyz, dtype=np.float64)
+        if view_target.shape != (3,) or not np.all(np.isfinite(view_target)):
+            raise ValueError("Manual target must contain three finite XYZ values")
+        target_quality = "manual XYZ"
+    target_size = span * 0.28 if span > 0 else 0.28
+    target_mesh = asymmetric_target_mesh(view_target, target_size)
+    target_points = np.vstack(target_mesh.faces)
 
     display_title = title or "Camera trajectory replay"
-    figure = plt.figure(figsize=(14, 8), facecolor="#08111f")
+    figure = plt.figure(figsize=(16, 9), facecolor="#08111f")
     figure.suptitle(
         display_title,
         color="#f8fafc",
@@ -138,10 +281,11 @@ def render_video(
             Line2D([0], [0], marker="o", color="none", markerfacecolor="#ef4444", label="End"),
             Line2D([0], [0], marker="o", color="none", markerfacecolor="#f59e0b", label="Current camera"),
             Line2D([0], [0], color="#f8fafc", linewidth=2, label="Viewing direction"),
+            Line2D([0], [0], marker="s", color="none", markerfacecolor="#0891b2", label="Synthetic target"),
         ],
         loc="upper center",
         bbox_to_anchor=(0.5, 0.955),
-        ncol=6,
+        ncol=7,
         frameon=True,
         fontsize=8,
     )
@@ -152,7 +296,7 @@ def render_video(
     figure.text(
         0.5,
         0.015,
-        "Short axes: X red, Y green, Z blue. Camera-to-parent OpenCV pose - not a robot command",
+        "Synthetic asymmetric target: red nose is FRONT. X red, Y green, Z blue - not a robot command",
         ha="center",
         color="#94a3b8",
         fontsize=9,
@@ -160,7 +304,7 @@ def render_video(
 
     scenes = []
     for plot_number, (view_name, elevation, azimuth) in enumerate(VIEW_SPECS, start=1):
-        axis = figure.add_subplot(2, 2, plot_number, projection="3d", facecolor="#0f1b2d")
+        axis = figure.add_subplot(2, 3, plot_number, projection="3d", facecolor="#0f1b2d")
         axis.plot(
             positions[:, 0],
             positions[:, 1],
@@ -172,6 +316,7 @@ def render_video(
         progress_line, = axis.plot([], [], [], color="#38bdf8", linewidth=2.4)
         frustum_line, = axis.plot([], [], [], color="#f59e0b", linewidth=1.5)
         forward_line, = axis.plot([], [], [], color="#f8fafc", linewidth=2.0)
+        target_line, = axis.plot([], [], [], color="#d946ef", linewidth=1.0, linestyle="--", alpha=0.8)
         current_point, = axis.plot([], [], [], marker="o", color="#f59e0b", markersize=5)
         coordinate_lines = [
             axis.plot([], [], [], color=color, linewidth=2.0)[0]
@@ -179,6 +324,23 @@ def render_video(
         ]
         axis.scatter(*positions[0], color="#22c55e", s=24, depthshade=False)
         axis.scatter(*positions[-1], color="#ef4444", s=24, depthshade=False)
+        model = Poly3DCollection(
+            target_mesh.faces,
+            facecolors=target_mesh.colors,
+            edgecolors="#e2e8f0",
+            linewidths=0.45,
+            alpha=0.9,
+        )
+        axis.add_collection3d(model)
+        axis.scatter(*view_target, color="#d946ef", marker="*", s=42, depthshade=False)
+        axis.plot(
+            [view_target[0], target_mesh.front_tip[0]],
+            [view_target[1], target_mesh.front_tip[1]],
+            [view_target[2], target_mesh.front_tip[2]],
+            color="#facc15",
+            linewidth=2.0,
+        )
+        axis.text(*target_mesh.front_tip, " FRONT", color="#facc15", fontsize=7)
         status = axis.text2D(0.03, 0.93, "", transform=axis.transAxes, color="#cbd5e1", fontsize=8)
 
         axis.set_title(view_name, color="#f8fafc", fontsize=11, pad=4)
@@ -191,10 +353,78 @@ def render_video(
             pane.set_facecolor((0.06, 0.11, 0.18, 1.0))
             pane.set_edgecolor("#334155")
         axis.view_init(elev=elevation, azim=azimuth)
-        _set_scene(axis, positions, camera_size)
-        scenes.append((progress_line, frustum_line, forward_line, current_point, coordinate_lines, status))
+        _set_scene(axis, np.vstack((positions, target_points)), camera_size)
+        scenes.append(
+            (progress_line, frustum_line, forward_line, target_line, current_point, coordinate_lines, status)
+        )
 
-    figure.subplots_adjust(left=0.02, right=0.98, bottom=0.07, top=0.89, wspace=0.02, hspace=0.16)
+    pov_axis = figure.add_subplot(2, 3, 5, facecolor="#0f1b2d")
+    pov_axis.set_title("Camera POV - synthetic target", color="#f8fafc", fontsize=11, pad=4)
+    pov_axis.set_xlim(-1.25, 1.25)
+    pov_axis.set_ylim(0.9, -0.9)
+    pov_axis.set_aspect("equal")
+    pov_axis.axvline(0, color="#475569", linewidth=0.8)
+    pov_axis.axhline(0, color="#475569", linewidth=0.8)
+    pov_axis.grid(True, color="#334155", alpha=0.3)
+    pov_axis.tick_params(colors="#64748b", labelsize=7)
+    pov_axis.set_xlabel("normalized image X", color="#94a3b8", fontsize=8)
+    pov_axis.set_ylabel("normalized image Y (down)", color="#94a3b8", fontsize=8)
+    pov_target, = pov_axis.plot([], [], marker="*", color="#d946ef", markersize=14)
+    pov_faces = []
+    for color in target_mesh.colors:
+        patch = Polygon(
+            np.zeros((3, 2)),
+            closed=True,
+            facecolor=color,
+            edgecolor="#e2e8f0",
+            linewidth=0.6,
+            alpha=0.9,
+        )
+        pov_axis.add_patch(patch)
+        pov_faces.append(patch)
+    pov_front = pov_axis.text(
+        0,
+        0,
+        "FRONT",
+        color="#facc15",
+        fontsize=8,
+        fontweight="bold",
+        clip_on=True,
+    )
+    pov_status = pov_axis.text(
+        0.03, 0.95, "", transform=pov_axis.transAxes, va="top", color="#cbd5e1", fontsize=9
+    )
+
+    info_axis = figure.add_subplot(2, 3, 6, facecolor="#0f1b2d")
+    info_axis.axis("off")
+    info_axis.text(
+        0.04,
+        0.94,
+        "Asymmetric synthetic target",
+        transform=info_axis.transAxes,
+        va="top",
+        color="#f8fafc",
+        fontsize=13,
+        fontweight="bold",
+    )
+    info_axis.text(
+        0.04,
+        0.82,
+        f"X  {view_target[0]: .4f}\nY  {view_target[1]: .4f}\nZ  {view_target[2]: .4f}\n"
+        f"unit  {trajectory.length_unit}\ncenter  {target_quality}\n\n"
+        "Red nose + yellow FRONT arrow define +X.\n"
+        "Pink side fin and offset green antenna make\n"
+        "front, back, left, and right distinguishable.\n\n"
+        "This is deterministic Python geometry, not a\n"
+        "generated video or detected physical object.",
+        transform=info_axis.transAxes,
+        va="top",
+        color="#cbd5e1",
+        fontsize=10,
+        linespacing=1.55,
+    )
+
+    figure.subplots_adjust(left=0.035, right=0.985, bottom=0.07, top=0.89, wspace=0.13, hspace=0.18)
 
     def update(source_index: int) -> list[object]:
         origin = positions[source_index]
@@ -205,7 +435,7 @@ def render_video(
         )
         frustum = _frustum_polyline(origin, corners)
         updated = []
-        for progress, frustum_line, forward_line, point, coordinate_lines, status in scenes:
+        for progress, frustum_line, forward_line, target_line, point, coordinate_lines, status in scenes:
             progress.set_data_3d(
                 positions[: source_index + 1, 0],
                 positions[: source_index + 1, 1],
@@ -214,6 +444,11 @@ def render_video(
             frustum_line.set_data_3d(frustum[:, 0], frustum[:, 1], frustum[:, 2])
             forward_line.set_data_3d(
                 [origin[0], forward[0]], [origin[1], forward[1]], [origin[2], forward[2]]
+            )
+            target_line.set_data_3d(
+                [origin[0], view_target[0]],
+                [origin[1], view_target[1]],
+                [origin[2], view_target[2]],
             )
             point.set_data_3d([origin[0]], [origin[1]], [origin[2]])
             for endpoint, coordinate_line in zip(axis_endpoints, coordinate_lines):
@@ -224,7 +459,49 @@ def render_video(
                 f"frame {int(trajectory.frame_indexes[source_index])} / "
                 f"{int(trajectory.frame_indexes[-1])}    t={trajectory.times_s[source_index]:.2f}s"
             )
-            updated.extend((progress, frustum_line, forward_line, point, *coordinate_lines, status))
+            updated.extend(
+                (progress, frustum_line, forward_line, target_line, point, *coordinate_lines, status)
+            )
+
+        target_camera = target_in_camera(
+            origin,
+            trajectory.quaternions_xyzw[source_index],
+            view_target,
+        )
+        if target_camera[2] > 1e-9:
+            normalized_x = target_camera[0] / target_camera[2]
+            normalized_y = target_camera[1] / target_camera[2]
+            pov_target.set_data([normalized_x], [normalized_y])
+            visibility = "in front" if abs(normalized_x) <= 1.25 and abs(normalized_y) <= 0.9 else "outside virtual frame"
+            pov_status.set_text(
+                f"target: u={normalized_x:+.2f}, v={normalized_y:+.2f}\n"
+                f"depth={target_camera[2]:.3f} {trajectory.length_unit} ({visibility})"
+            )
+        else:
+            pov_target.set_data([], [])
+            pov_status.set_text("target proxy is behind this camera")
+        for face, patch in zip(target_mesh.faces, pov_faces):
+            camera_face = points_in_camera(
+                origin,
+                trajectory.quaternions_xyzw[source_index],
+                face,
+            )
+            if np.all(camera_face[:, 2] > 1e-9):
+                projected = camera_face[:, :2] / camera_face[:, 2, None]
+                patch.set_xy(projected)
+                patch.set_visible(True)
+                patch.set_zorder(1000.0 / float(np.mean(camera_face[:, 2])))
+            else:
+                patch.set_visible(False)
+        front_camera = target_in_camera(origin, trajectory.quaternions_xyzw[source_index], target_mesh.front_tip)
+        if front_camera[2] > 1e-9:
+            front_x = front_camera[0] / front_camera[2]
+            front_y = front_camera[1] / front_camera[2]
+            pov_front.set_position((front_x, front_y))
+            pov_front.set_visible(abs(front_x) <= 1.25 and abs(front_y) <= 0.9)
+        else:
+            pov_front.set_visible(False)
+        updated.extend((pov_target, pov_status, pov_front, *pov_faces))
         return updated
 
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -250,6 +527,13 @@ def parser() -> argparse.ArgumentParser:
     command.add_argument("--speed", type=float, default=1.0, help="Playback speed multiplier (default: 1)")
     command.add_argument("--dpi", type=int, default=120, help="Rendering resolution scale (default: 120)")
     command.add_argument("--title", help="Custom video title")
+    command.add_argument(
+        "--target",
+        nargs=3,
+        type=float,
+        metavar=("X", "Y", "Z"),
+        help="Manual synthetic-target center; defaults to optical-axis estimation",
+    )
     return command
 
 
@@ -263,6 +547,7 @@ def main() -> None:
         speed=args.speed,
         dpi=args.dpi,
         title=args.title,
+        target_xyz=args.target,
     )
 
 
