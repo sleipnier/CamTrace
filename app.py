@@ -4,13 +4,21 @@
 from __future__ import annotations
 
 import os
+import shutil
+import uuid
+import zipfile
+from pathlib import Path
 
 import gradio as gr
 
+from render_camera_trajectory_video import render_video
 from service import ServiceConfig, ServiceError, build_dataset, cleanup_results
+from visualize_camera_trajectory import load_trajectory
 
 
 CONFIG = ServiceConfig.from_env()
+VISUALIZATION_SUFFIXES = {".zip", ".csv", ".json", ".jsonl"}
+VISUALIZATION_MAX_BYTES = 25 * 1024 * 1024
 
 
 def process_video(video_path: str | None) -> tuple[str, str | None]:
@@ -28,18 +36,90 @@ def process_video(video_path: str | None) -> tuple[str, str | None]:
         return "Unexpected service error. Check the container logs.", None
 
 
+def render_visualization(
+    dataset_path: str | None,
+    fps: float,
+    speed: float,
+) -> tuple[str, str | None, str | None]:
+    if not dataset_path:
+        return "Select a trajectory dataset before rendering.", None, None
+
+    source = Path(dataset_path)
+    result_dir: Path | None = None
+    try:
+        if source.is_symlink() or not source.is_file():
+            raise ServiceError("Visualization input must be a regular file")
+        if source.suffix.lower() not in VISUALIZATION_SUFFIXES:
+            raise ServiceError("Upload a dataset ZIP, CSV, JSON, or JSONL file")
+        if source.stat().st_size > VISUALIZATION_MAX_BYTES:
+            raise ServiceError("Visualization input must not exceed 25 MB")
+        if source.suffix.lower() == ".zip":
+            with zipfile.ZipFile(source) as archive:
+                try:
+                    member = archive.getinfo("camera_cartesian_trajectory.json")
+                except KeyError as error:
+                    raise ServiceError("Dataset ZIP is missing camera_cartesian_trajectory.json") from error
+                if member.file_size > VISUALIZATION_MAX_BYTES:
+                    raise ServiceError("Trajectory data inside the ZIP must not exceed 25 MB")
+
+        trajectory = load_trajectory(source)
+        if len(trajectory.positions) > CONFIG.max_frames:
+            raise ServiceError(f"Trajectory must contain at most {CONFIG.max_frames} poses")
+
+        cleanup_results(CONFIG)
+        result_dir = CONFIG.runtime_root / "results" / f"visualization-{uuid.uuid4().hex}"
+        output = result_dir / "camera_trajectory_multiview.mp4"
+        render_video(trajectory, output, fps=float(fps), speed=float(speed), dpi=90)
+        status = f"Rendered {len(trajectory.positions)} poses at {float(speed):g}x playback speed"
+        return status, str(output), str(output)
+    except ServiceError as error:
+        return str(error), None, None
+    except (OSError, TypeError, ValueError, RuntimeError, zipfile.BadZipFile) as error:
+        if result_dir is not None:
+            shutil.rmtree(result_dir, ignore_errors=True)
+        return f"Visualization failed: {error}", None, None
+
+
 def create_app() -> gr.Blocks:
     with gr.Blocks(title="Video to Camera Dataset") as demo:
         gr.Markdown(
             "# Video to Camera Dataset\n"
-            "Upload an 8-1000 frame video. The GPU reconstructs camera motion and returns "
-            "PoseStamped JSONL, CSV, Cartesian trajectory JSON, and a checksum manifest."
+            "Reconstruct camera motion from video, or turn an existing trajectory dataset into a "
+            "synchronized multi-view MP4."
         )
-        video = gr.File(label="Source video", file_types=["video"], type="filepath")
-        start = gr.Button("Build dataset", variant="primary")
-        status = gr.Textbox(label="Status", interactive=False)
-        dataset = gr.File(label="Camera dataset ZIP", interactive=False)
-        start.click(process_video, inputs=video, outputs=[status, dataset])
+        with gr.Tab("Build dataset / 生成数据集"):
+            gr.Markdown(
+                "Upload an 8-1000 frame video. The GPU returns PoseStamped JSONL, CSV, "
+                "Cartesian trajectory JSON, and a checksum manifest."
+            )
+            video = gr.File(label="Source video / 源视频", file_types=["video"], type="filepath")
+            start = gr.Button("Build dataset / 生成数据集", variant="primary")
+            status = gr.Textbox(label="Status / 状态", interactive=False)
+            dataset = gr.File(label="Camera dataset ZIP / 相机数据集", interactive=False)
+            start.click(process_video, inputs=video, outputs=[status, dataset])
+
+        with gr.Tab("Visualize trajectory / 轨迹可视化"):
+            gr.Markdown(
+                "Upload a generated ZIP or `camera_trajectory.csv` to render Perspective, XY, XZ, "
+                "and YZ views. This shows camera motion only, not robot links or executable commands."
+            )
+            trajectory_file = gr.File(
+                label="Trajectory dataset / 轨迹数据",
+                file_types=[".zip", ".csv", ".json", ".jsonl"],
+                type="filepath",
+            )
+            with gr.Row():
+                render_fps = gr.Slider(10, 60, value=24, step=1, label="Video FPS / 视频帧率")
+                render_speed = gr.Slider(0.25, 4, value=1, step=0.25, label="Playback speed / 播放速度")
+            render = gr.Button("Render video / 生成可视化视频", variant="primary")
+            render_status = gr.Textbox(label="Status / 状态", interactive=False)
+            preview = gr.Video(label="Multi-view preview / 多视角预览", interactive=False)
+            download = gr.File(label="Download MP4 / 下载视频", interactive=False)
+            render.click(
+                render_visualization,
+                inputs=[trajectory_file, render_fps, render_speed],
+                outputs=[render_status, preview, download],
+            )
     return demo
 
 
