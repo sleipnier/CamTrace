@@ -49,6 +49,25 @@ class WebVisualizationTest(unittest.TestCase):
             self.assertEqual(Path(preview).name, "camera_trajectory_multiview.mp4")
             self.assertEqual(Path(preview).parent.parent, root / "runtime" / "results")
             render_mock.assert_called_once()
+            self.assertIsNone(render_mock.call_args.kwargs["target_xyz"])
+
+    @mock.patch("app.render_video")
+    @mock.patch("app.load_trajectory")
+    def test_requires_complete_manual_target(self, load_mock, render_mock):
+        load_mock.return_value = mock.Mock(positions=np.zeros((2, 3)))
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "camera_trajectory.csv"
+            source.write_text("trajectory")
+            with mock.patch.object(app, "CONFIG", self.config(root)):
+                status, preview, download = app.render_visualization(
+                    str(source), 24, 1, target_x=1.0, target_y=None, target_z=3.0
+                )
+
+        self.assertIn("all three target XYZ", status)
+        self.assertIsNone(preview)
+        self.assertIsNone(download)
+        render_mock.assert_not_called()
 
     @mock.patch("app.render_video")
     @mock.patch("app.load_trajectory")

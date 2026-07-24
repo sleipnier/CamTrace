@@ -3,11 +3,14 @@ import unittest
 import numpy as np
 
 from render_camera_trajectory_video import (
+    asymmetric_target_mesh,
     camera_geometry,
     estimate_view_target,
     playback_indexes,
+    points_in_camera,
     target_in_camera,
 )
+from video_to_camera import matrix_to_quaternion_xyzw
 from visualize_camera_trajectory import CameraTrajectory
 
 
@@ -98,6 +101,47 @@ class CameraTrajectoryVideoTest(unittest.TestCase):
             np.array([1.0, 0.0, 0.0]),
         )
         np.testing.assert_allclose(rotated_target, [0.0, 0.0, 1.0], atol=1e-12)
+
+    def test_asymmetric_target_has_distinct_front_side_and_top(self):
+        mesh = asymmetric_target_mesh(np.array([1.0, 2.0, 3.0]), 2.0)
+        points = np.vstack(mesh.faces)
+        self.assertEqual(len(mesh.faces), 29)
+        self.assertEqual(len(mesh.colors), len(mesh.faces))
+        self.assertGreater(mesh.front_tip[0], points[:, 0].mean())
+        np.testing.assert_allclose(mesh.front_tip[1:], [2.0, 3.0])
+        self.assertGreater(points[:, 1].max() - 2.0, 2.0 - points[:, 1].min())
+        self.assertGreater(points[:, 2].max() - 3.0, 3.0 - points[:, 2].min())
+
+    def test_target_remains_visible_through_360_degree_orbit(self):
+        target = np.zeros(3)
+        model = asymmetric_target_mesh(target, 0.5)
+        normalized_front_x = []
+        silhouette_widths = []
+        silhouette_heights = []
+        model_points = np.vstack(model.faces)
+        for angle in np.linspace(0, 2 * np.pi, 8, endpoint=False):
+            camera = np.array([3 * np.cos(angle), 3 * np.sin(angle), 0.0])
+            forward = -camera / np.linalg.norm(camera)
+            down = np.array([0.0, 0.0, -1.0])
+            right = np.cross(down, forward)
+            rotation = np.column_stack((right, down, forward))
+            quaternion = matrix_to_quaternion_xyzw(rotation)
+
+            center_camera = target_in_camera(camera, quaternion, target)
+            np.testing.assert_allclose(center_camera, [0.0, 0.0, 3.0], atol=1e-12)
+            front_camera = points_in_camera(camera, quaternion, model.front_tip[None, :])[0]
+            self.assertGreater(front_camera[2], 0)
+            normalized_front_x.append(front_camera[0] / front_camera[2])
+            projected_points = points_in_camera(camera, quaternion, model_points)
+            self.assertTrue(np.all(projected_points[:, 2] > 0))
+            projected_xy = projected_points[:, :2] / projected_points[:, 2, None]
+            self.assertTrue(np.all(np.isfinite(projected_xy)))
+            silhouette_widths.append(np.ptp(projected_xy[:, 0]))
+            silhouette_heights.append(np.ptp(projected_xy[:, 1]))
+
+        self.assertGreater(np.ptp(normalized_front_x), 0.1)
+        self.assertGreater(np.ptp(silhouette_widths), 0.01)
+        self.assertGreater(np.ptp(silhouette_heights), 0.005)
 
 
 if __name__ == "__main__":

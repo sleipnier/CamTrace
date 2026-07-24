@@ -10,6 +10,7 @@ import zipfile
 from pathlib import Path
 
 import gradio as gr
+import numpy as np
 
 from render_camera_trajectory_video import render_video
 from service import ServiceConfig, ServiceError, build_dataset, cleanup_results
@@ -40,6 +41,9 @@ def render_visualization(
     dataset_path: str | None,
     fps: float,
     speed: float,
+    target_x: float | None = None,
+    target_y: float | None = None,
+    target_z: float | None = None,
 ) -> tuple[str, str | None, str | None]:
     if not dataset_path:
         return "Select a trajectory dataset before rendering.", None, None
@@ -65,11 +69,26 @@ def render_visualization(
         trajectory = load_trajectory(source)
         if len(trajectory.positions) > CONFIG.max_frames:
             raise ServiceError(f"Trajectory must contain at most {CONFIG.max_frames} poses")
+        target_values = (target_x, target_y, target_z)
+        if any(value is not None for value in target_values) and not all(
+            value is not None for value in target_values
+        ):
+            raise ServiceError("Enter all three target XYZ values, or leave all three empty")
+        target_xyz = None if target_x is None else np.asarray(target_values, dtype=np.float64)
+        if target_xyz is not None and not np.all(np.isfinite(target_xyz)):
+            raise ServiceError("Target XYZ values must be finite")
 
         cleanup_results(CONFIG)
         result_dir = CONFIG.runtime_root / "results" / f"visualization-{uuid.uuid4().hex}"
         output = result_dir / "camera_trajectory_multiview.mp4"
-        render_video(trajectory, output, fps=float(fps), speed=float(speed), dpi=90)
+        render_video(
+            trajectory,
+            output,
+            fps=float(fps),
+            speed=float(speed),
+            dpi=90,
+            target_xyz=target_xyz,
+        )
         status = f"Rendered {len(trajectory.positions)} poses at {float(speed):g}x playback speed"
         return status, str(output), str(output)
     except ServiceError as error:
@@ -110,13 +129,13 @@ def create_app() -> gr.Blocks:
                 "<span style='color:#334155'>━</span> Full route / 完整路线　"
                 "<span style='color:#38bdf8'>━</span> Traveled route / 已行进路线　"
                 "<span style='color:#f59e0b'>●</span> Current camera / 当前镜头  \n"
-                "<span style='color:#d946ef'>★</span> Estimated target / 估算拍摄物　"
+                "<span style='color:#0891b2'>■</span> Asymmetric target / 不对称目标模型　"
                 "White line / 白线: viewing direction / 镜头朝向。"
                 "Short axes / 短轴: <span style='color:#ef4444'>X red</span>, "
                 "<span style='color:#22c55e'>Y green</span>, "
                 "<span style='color:#3b82f6'>Z blue</span>.  \n"
-                "`Camera POV` shows the estimated target in normalized camera coordinates. "
-                "CSV has no pixels or object labels, so this is an optical-axis estimate, not object detection."
+                "`Camera POV` projects a deterministic Python model. Its red nose is the FRONT; "
+                "the pink side fin and offset green antenna reveal rotation during a 360-degree orbit."
             )
             trajectory_file = gr.File(
                 label="Trajectory dataset / 轨迹数据",
@@ -126,13 +145,20 @@ def create_app() -> gr.Blocks:
             with gr.Row():
                 render_fps = gr.Slider(10, 60, value=24, step=1, label="Video FPS / 视频帧率")
                 render_speed = gr.Slider(0.25, 4, value=1, step=0.25, label="Playback speed / 播放速度")
+            gr.Markdown(
+                "Optional target center / 可选目标中心：留空时按镜头光轴估算；已知坐标时填写完整 XYZ。"
+            )
+            with gr.Row():
+                target_x = gr.Number(value=None, label="Target X")
+                target_y = gr.Number(value=None, label="Target Y")
+                target_z = gr.Number(value=None, label="Target Z")
             render = gr.Button("Render video / 生成可视化视频", variant="primary")
             render_status = gr.Textbox(label="Status / 状态", interactive=False)
             preview = gr.Video(label="Multi-view preview / 多视角预览", interactive=False)
             download = gr.File(label="Download MP4 / 下载视频", interactive=False)
             render.click(
                 render_visualization,
-                inputs=[trajectory_file, render_fps, render_speed],
+                inputs=[trajectory_file, render_fps, render_speed, target_x, target_y, target_z],
                 outputs=[render_status, preview, download],
             )
     return demo
