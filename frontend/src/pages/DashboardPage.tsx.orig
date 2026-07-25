@@ -4,10 +4,11 @@ import {
   RotateCcw, Route, Upload, Video, X,
 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
-import { jobsApi, trajectoryApi, visualizationsApi, type JobDetail } from '../api'
+import { jobsApi, robotsApi, trajectoryApi, visualizationsApi, type JobDetail } from '../api'
 import { ApiError, apiUrl } from '../api/http'
 import { StatusBadge } from '../components/StatusBadge'
 import { TrajectoryCanvas } from '../components/TrajectoryCanvas'
+import { RobotIntegrationPanel } from '../components/RobotIntegrationPanel'
 
 const allowed = ['video/mp4', 'video/quicktime', 'video/webm', 'video/x-matroska']
 const formatBytes = (bytes: number) => `${(bytes / 1024 / 1024).toFixed(1)} MB`
@@ -26,6 +27,7 @@ function RequirementsPanel() {
         <li><Check /><span><strong>帧数范围</strong>8～1000 帧</span></li>
         <li><Check /><span><strong>最高分辨率</strong>3840 × 2160</span></li>
       </ul>
+      <div className="safety-note"><AlertTriangle /><p><strong>注意</strong>输出是相机重建轨迹，不能直接作为机器人执行指令。</p></div>
     </div>
   )
 }
@@ -80,6 +82,7 @@ export function DashboardPage() {
     getNextPageParam: (lastPage) => lastPage.nextCursor,
     refetchInterval: (query) => (query.state.data?.pages.length ?? 1) === 1 ? 5000 : false,
   })
+  const robotsQuery = useQuery({ queryKey: ['robots'], queryFn: robotsApi.list, refetchInterval: 3000 })
   const jobQuery = useQuery({
     queryKey: ['job', activeJobId], queryFn: () => jobsApi.get(activeJobId!), enabled: Boolean(activeJobId),
     refetchInterval: (query) => ['succeeded', 'failed'].includes(query.state.data?.status ?? '') ? false : 1200,
@@ -113,6 +116,9 @@ export function DashboardPage() {
       queryClient.setQueryData(['job', cancelled.id], cancelled)
       queryClient.invalidateQueries({ queryKey: ['jobs'] })
     },
+  })
+  const startCameraMotion = useMutation({
+    mutationFn: ({ jobId, robotId }: { jobId: string; robotId: string }) => robotsApi.startCameraMotion(jobId, robotId),
   })
   const createVisualization = useMutation({
     mutationFn: async () => {
@@ -307,7 +313,7 @@ export function DashboardPage() {
                 <span className="panel-kicker">LIVE COORDINATES</span><div className="side-title-row"><h2>XYZ 位姿</h2><strong className="frame-chip">#{point.frameIndex}</strong></div>
                 <div className="coordinate-stack">{['X','Y','Z'].map((axis, index) => <div key={axis}><span className={`axis axis-${axis.toLowerCase()}`}>{axis}</span><strong>{point.positionXYZ[index].toFixed(5)}</strong><small>{trajectory.lengthUnit}</small></div>)}</div>
                 <h3 className="quaternion-title">QUATERNION / XYZW</h3><div className="quat-grid">{point.orientationXYZW.map((value, index) => <div key={index}><span>Q{['X','Y','Z','W'][index]}</span><strong>{value.toFixed(4)}</strong></div>)}</div>
-                <dl className="trajectory-meta"><div><dt>FRAME ID</dt><dd>{trajectory.frameId}</dd></div><div><dt>CHILD FRAME</dt><dd>{trajectory.childFrameId}</dd></div><div><dt>TIME</dt><dd>{point.timeFromStartS.toFixed(3)}s</dd></div><div><dt>FIRST NORMALIZED</dt><dd>{trajectory.firstPoseNormalized ? 'TRUE' : 'FALSE'}</dd></div></dl>
+                <dl className="trajectory-meta"><div><dt>FRAME ID</dt><dd>{trajectory.frameId}</dd></div><div><dt>CHILD FRAME</dt><dd>{trajectory.childFrameId}</dd></div><div><dt>TIME</dt><dd>{point.timeFromStartS.toFixed(3)}s</dd></div><div><dt>FIRST NORMALIZED</dt><dd>{trajectory.firstPoseNormalized ? 'TRUE' : 'FALSE'}</dd></div><div><dt>ROBOT READY</dt><dd>FALSE</dd></div></dl>
                 {job?.resultAvailable !== false && job?.artifacts?.length ? <div className="artifact-actions">{job.artifacts.map((artifact) => <a className="button button-light" href={apiUrl(artifact.downloadUrl)} key={artifact.name} download>{artifact.kind === 'dataset' ? '下载完整数据集' : `下载 ${artifact.name}`}</a>)}</div> : null}
                 <button className="button button-light new-run" onClick={reset}>处理新视频</button>
               </div>
@@ -339,6 +345,8 @@ export function DashboardPage() {
         )}
       </section>
 
+      <RobotIntegrationPanel robots={robotsQuery.data?.items ?? []} loading={robotsQuery.isLoading} />
+
       <section className="queue-section" id="queue">
         <div className="section-heading"><div><span className="section-index">02</span><h2>任务队列</h2></div><span className="queue-live"><i /> {(listQuery.data?.pages.length ?? 1) === 1 ? 'LIVE · 5S REFRESH' : 'PAGED VIEW'}</span></div>
         <div className="job-table-wrap"><table className="job-table"><thead><tr><th>任务 / 文件</th><th>状态</th><th>进度</th><th>视频信息</th><th>时间</th><th /></tr></thead><tbody>
@@ -349,7 +357,7 @@ export function DashboardPage() {
         </tbody></table></div>
       </section>
 
-      <section className="single-about" id="about"><span className="section-index">03</span><h2>关于输出</h2><p>所有轨迹都以第一帧相机坐标系为基准，四元数顺序为 XYZW。</p></section>
+      <section className="single-about" id="about"><span className="section-index">03</span><h2>关于输出</h2><p>所有轨迹都以第一帧相机坐标系为基准，四元数顺序为 XYZW。未完成外部尺度、坐标系与手眼标定之前，数据始终标记为 <strong>robot_execution_ready: false</strong>。</p></section>
     </div>
   )
 }

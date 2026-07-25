@@ -8,7 +8,7 @@
 
 ```bash
 cd /path/to/videotocamera
-export VTC_PROJECT_ROOT="$PWD"
+ejmkxport VTC_PROJECT_ROOT="$PWD"
 export VTC_HOME=/hyperai/home
 export VTC_MEGASAM_ROOT=/hyperai/home/mega-sam
 export VTC_RUNTIME_ROOT=/hyperai/home/vtc-runtime
@@ -97,7 +97,7 @@ set +a
 bash hyperai_start.sh
 ```
 
-`.env` 已被本仓库的 `.gitignore` 排除；仍不要把真实密码复制到其他受版本控制的文件中。生产环境建议设置 `VTC_AUTH_USER` 和 `VTC_AUTH_PASSWORD`；两者均设置后，除 `/api/health` 外都会启用 HTTP Basic Auth。首页返回 401 通常表示服务已运行但请求未携带凭据。临时本地验证可在启动前执行：
+`.env` 已被本仓库的 `.gitignore` 排除；仍不要把真实密码复制到其他受版本控制的文件中。生产环境建议设置 `VTC_AUTH_USER` 和 `VTC_AUTH_PASSWORD`；两者均设置后，除 `/api/health` 外都会启用 HTTP Basic Auth。首页返回 P401 通常表示服务已运行但请求未携带凭据。临时本地验证可在启动前执行：
 
 ```bash
 unset VTC_AUTH_USER
@@ -329,3 +329,4 @@ JSONL 的 `header.stamp` 是为了兼容 `geometry_msgs/PoseStamped` 字段布�
 导出会先在同一父目录完整生成 staging 文件，再发布三个目标，但文件系统无法将三个独立文件作为一个事务原子替换。不要在其他不可信进程可修改的共享输出目录中运行；消费者应在生产者退出成功后再读取整组文件。
 
 MegaSaM 的便捷 NPZ 最多包含 1000 帧。本工具当前有意只读取明确的 `cam_c2w`，不会猜测 `poses.npy` 的 SE(3) 约定；长视频应先切段。
+
