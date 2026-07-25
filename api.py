@@ -27,6 +27,7 @@ from fastapi.staticfiles import StaticFiles
 
 from render_camera_trajectory_video import render_video
 from service import ServiceConfig, ServiceError, build_dataset, inspect_video, run_pipeline
+from state_store import StateStore
 from visualize_camera_trajectory import CameraTrajectory, load_trajectory
 
 
@@ -79,6 +80,11 @@ def job_path(job_id: str) -> Path:
     return JOB_ROOT / f"{job_id}.json"
 
 
+def state_store() -> StateStore:
+    """Return the store relative to the current runtime root."""
+    return StateStore(JOB_ROOT.parent / "state.sqlite3", JOB_ROOT, VISUALIZATION_ROOT)
+
+
 def encode_cursor(record: dict[str, Any]) -> str:
     payload = json.dumps(
         {"createdAt": record["createdAt"], "id": record["id"]},
@@ -120,7 +126,7 @@ def write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
 
 def save_job(job: dict[str, Any]) -> None:
     with state_lock:
-        write_json_atomic(job_path(job["id"]), job)
+        state_store().save_job(job)
 
 
 def visualization_state_path(identifier: str) -> Path:
@@ -129,7 +135,7 @@ def visualization_state_path(identifier: str) -> Path:
 
 def save_visualization_state(state: dict[str, Any]) -> None:
     with state_lock:
-        write_json_atomic(visualization_state_path(state["id"]), state)
+        state_store().save_visualization(state)
 
 
 def read_visualization_state(identifier: str) -> dict[str, Any]:
@@ -142,13 +148,12 @@ def read_visualization_state(identifier: str) -> dict[str, Any]:
         state = visualization_states.get(identifier)
         if state is not None:
             return state
-        try:
-            state = json.loads(visualization_state_path(identifier).read_text(encoding="utf-8"))
-        except (FileNotFoundError, json.JSONDecodeError) as error:
+        state = state_store().read_visualization(identifier)
+        if state is None:
             raise HTTPException(
                 404,
                 detail={"code": "VISUALIZATION_NOT_FOUND", "message": "可视化任务不存在"},
-            ) from error
+            )
         visualization_states[identifier] = state
         return state
 
@@ -164,12 +169,11 @@ def update_visualization_state(identifier: str, **changes: Any) -> dict[str, Any
 def read_job(job_id: str) -> dict[str, Any]:
     if not job_id or any(character not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-" for character in job_id):
         raise HTTPException(404, detail={"code": "JOB_NOT_FOUND", "message": "任务不存在"})
-    path = job_path(job_id)
-    try:
-        with state_lock:
-            return json.loads(path.read_text(encoding="utf-8"))
-    except (FileNotFoundError, json.JSONDecodeError) as error:
-        raise HTTPException(404, detail={"code": "JOB_NOT_FOUND", "message": "任务不存在"}) from error
+    with state_lock:
+        job = state_store().read_job(job_id)
+    if job is None:
+        raise HTTPException(404, detail={"code": "JOB_NOT_FOUND", "message": "任务不存在"})
+    return job
 
 
 def update_job(job_id: str, mutate: Callable[[dict[str, Any]], None]) -> dict[str, Any]:
@@ -362,12 +366,9 @@ app = FastAPI(title="CAM//TRACE API", version="1.0.0")
 
 def recover_incomplete_jobs() -> int:
     JOB_ROOT.mkdir(parents=True, exist_ok=True)
+    store = state_store()
     recovered = 0
-    for path in JOB_ROOT.glob("*.json"):
-        try:
-            job = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            continue
+    for job in store.list_jobs():
         if job.get("status") in {"succeeded", "failed"}:
             continue
         job.update({
@@ -391,13 +392,10 @@ def recover_incomplete_jobs() -> int:
 
 def recover_visualization_states() -> int:
     VISUALIZATION_ROOT.mkdir(parents=True, exist_ok=True)
+    store = state_store()
     recovered = 0
-    for path in VISUALIZATION_ROOT.glob("*/state.json"):
-        try:
-            state = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            continue
-        identifier = str(state.get("id", path.parent.name))
+    for state in store.list_visualizations():
+        identifier = str(state.get("id", ""))
         if state.get("status") in {"queued", "rendering"}:
             state.update({
                 "status": "failed",
@@ -430,6 +428,7 @@ def recover_visualization_states() -> int:
 
 @app.on_event("startup")
 def startup_recovery() -> None:
+    state_store().migrate_legacy()
     recover_incomplete_jobs()
     recover_visualization_states()
 
@@ -494,15 +493,7 @@ def list_jobs(
     cursor: str | None = None,
 ) -> dict[str, Any]:
     JOB_ROOT.mkdir(parents=True, exist_ok=True)
-    records = []
-    for path in JOB_ROOT.glob("*.json"):
-        try:
-            record = json.loads(path.read_text(encoding="utf-8"))
-            if status is None or record.get("status") == status:
-                records.append(record)
-        except (OSError, json.JSONDecodeError):
-            continue
-    records.sort(key=lambda item: (item["createdAt"], item["id"]), reverse=True)
+    records = state_store().list_jobs(status)
     if cursor:
         cursor_key = decode_cursor(cursor)
         records = [

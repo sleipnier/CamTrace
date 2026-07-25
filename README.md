@@ -2,93 +2,144 @@
 
 输入普通视频，调用 MegaSaM 重建逐帧相机运动，并导出统一的笛卡尔位姿数据。时间单位为秒、姿态为 Quaternion `x,y,z,w`。未经外部尺度标定时，长度明确标为 `reconstruction_unit`，不会冒充物理米。
 
-## 环境
+## 快速启动
 
-完整重建应在 NVIDIA GPU Linux 主机上运行。MegaSaM 官方环境依赖 Python 3.10、CUDA 11.8、PyTorch 2.0.1、Depth Anything、UniDepth 和 CUDA 扩展。此工具不修改 MegaSaM，也不会在不支持 CUDA 的 macOS 上模拟运行。
+如果 GPU 环境已经通过下文的安装脚本配置完成，在仓库根目录执行：
 
-本工具自身只需要：
+```bash
+cd /path/to/videotocamera
+export VTC_PROJECT_ROOT="$PWD"
+export VTC_HOME=/hyperai/home
+export VTC_MEGASAM_ROOT=/hyperai/home/mega-sam
+export VTC_RUNTIME_ROOT=/hyperai/home/vtc-runtime
+export VTC_HOST=0.0.0.0
+export VTC_PORT=7860
+bash hyperai_start.sh
+```
+
+然后访问 `http://<服务器地址>:7860`。在 HyperAI 中还需要映射容器端口 `7860`。健康检查：
+
+```bash
+curl http://127.0.0.1:7860/api/health
+```
+
+预期响应为 `{"status":"ok","service":"camera-trace-api"}`。
+
+`hyperai_start.sh` 会使用已有的 `frontend/dist`；如果该目录不存在且系统已安装 Node.js，它会自动构建前端。前端代码有改动时，建议手动重新构建：
+
+```bash
+cd frontend
+npm ci
+npm run build
+cd ..
+```
+
+## 运行环境
+
+完整重建应在 NVIDIA GPU Linux 主机上运行。RTX 3090 官方环境使用 Python 3.10、CUDA 11.8 和 PyTorch 2.0.1；RTX 5090 必须使用兼容 Blackwell、CUDA 12.8 和 `sm_120` 的镜像。仅启动 API、查看页面或运行非 GPU 工具时，可以只安装：
 
 ```bash
 python -m pip install -r requirements.txt
 ```
 
-系统还需安装 `ffmpeg` 和 `ffprobe`。
+系统还需安装 `ffmpeg` 和 `ffprobe`。真正提交视频重建任务时，必须完成下面的 MegaSaM GPU 环境安装。
 
 ## HyperAI CAM//TRACE Web 服务
 
-Web 服务由 React、FastAPI 和后台 GPU 重建任务组成。FastAPI 默认在同一端口提供 /api 和已构建的 frontend/dist，不再依赖 Gradio 页面。
+Web 服务由 React、FastAPI 和后台 GPU 重建任务组成。FastAPI 默认在同一端口提供 `/api` 和已构建的 `frontend/dist`。
 
-### 环境与安装
+### 首次安装
 
-官方环境推荐 RTX 3090、CUDA 11.8 和 PyTorch 2.0.1，使用 hyperai_install.sh。RTX 5090 必须选择兼容 Blackwell 的 HyperAI PyTorch GPU 镜像，并使用经过实机验证的 hyperai_install_blackwell.sh 安装 CUDA 扩展；不能在 RTX 5090 上直接运行官方 CUDA 11.8 二进制。
+HyperAI 中只有 `/hyperai/home` 会在容器停止后持久保留。项目、Python 用户包、模型、运行结果和缓存都应放在该目录下。安装脚本会下载 MegaSaM、模型和 Python/CUDA 依赖，需要联网且耗时较长。
 
-HyperAI 中只有 /hyperai/home 会在容器停止后持久保留。项目、Python 用户包、模型、运行结果和缓存都应放在该目录下。
+```bash
+cd /hyperai/home/videotocamera
+export VTC_PROJECT_ROOT="$PWD"
+export VTC_HOME=/hyperai/home
+export VTC_MEGASAM_ROOT=/hyperai/home/mega-sam
 
-~~~bash
-cd /hyperai/home/videotocamera  # 替换成项目实际目录
-
-# RTX 3090
+# RTX 3090：CUDA 11.8 镜像
 bash hyperai_install.sh
 
-# RTX 5090
+# RTX 5090：Blackwell / CUDA 12.8 镜像；与上一条二选一
 bash hyperai_install_blackwell.sh
-~~~
+```
 
-系统还必须能够执行 ffmpeg、ffprobe 和 nvidia-smi。
+安装前应确认系统能够执行 `git`、`curl`、`ffmpeg`、`ffprobe` 和 `nvidia-smi`。RTX 3090 脚本还要求 Conda 与 CUDA 11.8 的 `nvcc`；RTX 5090 脚本要求镜像已提供 Python 3.10、PyTorch 2.8.0、CUDA 12.8 和支持 `sm_120` 的 GPU 构建。
 
 ### 构建并启动
 
-首次启动或前端代码变更后构建：
-
-~~~bash
+```bash
 cd /hyperai/home/videotocamera/frontend
-npm install
+npm ci
 npm run build
-~~~
 
-启动 API 与网页：
-
-~~~bash
-cd /hyperai/home/videotocamera
-
+cd ..
 export VTC_PROJECT_ROOT="$PWD"
 export VTC_HOME=/hyperai/home
 export VTC_RUNTIME_ROOT=/hyperai/home/vtc-runtime
 export VTC_MEGASAM_ROOT=/hyperai/home/mega-sam
 export VTC_HOST=0.0.0.0
 export VTC_PORT=7860
+bash hyperai_start.sh
+```
 
-python api_server.py
-~~~
+如果不使用启动脚本，也可以在已经激活的正确 Python 环境中执行 `python api_server.py`。无论项目放在哪里，都建议显式设置 `VTC_PROJECT_ROOT="$PWD"`，避免启动到旧的部署副本。
 
-如果项目直接位于 /hyperai/home，先进入 /hyperai/home，并仍然显式设置 VTC_PROJECT_ROOT="$PWD"，避免启动到旧的部署副本。
+`hyperai.env.example` 只是配置参考，启动脚本不会自动读取它。若要使用配置文件，先复制、修改，再显式加载：
 
-也可以使用：
+```bash
+cp hyperai.env.example .env
+# 编辑 .env 中的路径和认证信息
+set -a
+source .env
+set +a
+bash hyperai_start.sh
+```
 
-~~~bash
-VTC_PROJECT_ROOT="$PWD" VTC_HOME=/hyperai/home bash hyperai_start.sh
-~~~
+`.env` 已被本仓库的 `.gitignore` 排除；仍不要把真实密码复制到其他受版本控制的文件中。生产环境建议设置 `VTC_AUTH_USER` 和 `VTC_AUTH_PASSWORD`；两者均设置后，除 `/api/health` 外都会启用 HTTP Basic Auth。首页返回 401 通常表示服务已运行但请求未携带凭据。临时本地验证可在启动前执行：
 
-在 HyperAI 控制台映射容器端口 7860。健康检查：
-
-~~~bash
-curl http://127.0.0.1:7860/api/health
-~~~
-
-预期响应：
-
-~~~json
-{"status":"ok","service":"camera-trace-api"}
-~~~
-
-配置 VTC_AUTH_USER 和 VTC_AUTH_PASSWORD 后，除 /api/health 外均启用 HTTP Basic Auth。首页返回 401 通常表示服务已经运行，但请求没有携带用户名和密码。临时本地验证可在启动前执行：
-
-~~~bash
+```bash
 unset VTC_AUTH_USER
 unset VTC_AUTH_PASSWORD
-~~~
+```
 
-生产映射地址不应匿名暴露。/favicon.ico 返回 404 只表示尚未配置网站图标，不影响 API 和重建功能。
+生产映射地址不应匿名暴露。`/favicon.ico` 返回 404 不影响 API 和重建功能。
+
+### 本地前端开发
+
+需要修改 React 页面时，分别启动后端与 Vite 开发服务器。终端一：
+
+```bash
+cd /path/to/videotocamera
+python -m pip install -r requirements.txt
+export VTC_PROJECT_ROOT="$PWD"
+export VTC_RUNTIME_ROOT=/tmp/vtc-runtime
+export VTC_MEGASAM_ROOT=/path/to/mega-sam
+python api_server.py
+```
+
+终端二：
+
+```bash
+cd /path/to/videotocamera/frontend
+npm ci
+npm run dev
+```
+
+访问 `http://127.0.0.1:5173`。Vite 会把 `/api` 代理到 `http://localhost:7860`。没有 NVIDIA GPU 和完整 MegaSaM 环境时，页面与健康检查仍可启动，但视频重建任务不能成功执行。
+
+### 持久化与运行时目录
+
+任务元数据和可视化状态默认保存到 `VTC_RUNTIME_ROOT/api/state.sqlite3`；视频、ZIP 和日志仍保存在同一运行时根目录下的 `uploads/`、`results/` 和 `errors/`。旧版本的 `jobs/*.json` 与 `visualizations/*/state.json` 会在启动时自动导入 SQLite，原 JSON 文件不会被删除。数据库只保存元数据和相对/可配置制品路径，不应提交到 Git。
+
+如需显式迁移而不启动服务，可执行：
+
+```bash
+python migrate_json_to_sqlite.py --runtime-root /hyperai/home/vtc-runtime
+```
+
+项目启动入口默认使用当前项目根目录；生产环境应显式设置 `VTC_PROJECT_ROOT`，并确保只存在一个有效源码副本。
 
 ### 上传限制与任务隔离
 

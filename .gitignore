@@ -23,6 +23,8 @@ vtc-runtime/
 *.log
 *.pid
 *.status
+*.sqlite3
+*.sqlite3-*
 current-gradio-requests.txt
 
 # Independent web frontend

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 HOME_ROOT="${VTC_HOME:-/hyperai/home}"
-PROJECT_ROOT="${VTC_PROJECT_ROOT:-${HOME_ROOT}/videotocamera}"
+PROJECT_ROOT="${VTC_PROJECT_ROOT:-${HOME_ROOT}}"
 ENV_ROOT="${VTC_ENV_ROOT:-${HOME_ROOT}/envs/mega_sam}"
 
 if [[ -x "${ENV_ROOT}/bin/python" ]]; then
@@ -14,6 +14,7 @@ else
 fi
 command -v ffmpeg >/dev/null
 command -v ffprobe >/dev/null
+[[ -f "${PROJECT_ROOT}/api_server.py" ]] || { echo "Invalid VTC_PROJECT_ROOT: ${PROJECT_ROOT}" >&2; exit 1; }
 export HF_HOME="${HF_HOME:-${HOME_ROOT}/cache/huggingface}"
 export VTC_PROJECT_ROOT="${PROJECT_ROOT}"
 export VTC_MEGASAM_ROOT="${VTC_MEGASAM_ROOT:-${HOME_ROOT}/mega-sam}"
