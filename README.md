@@ -1,6 +1,6 @@
 # Video to Camera Motion
 
-输入普通视频，调用 MegaSaM 重建逐帧相机运动，并导出统一的笛卡尔位姿数据。时间单位为秒、姿态为 Quaternion `x,y,z,w`。未经外部尺度标定时，长度明确标为 `reconstruction_unit`，不会冒充物理米。
+输入普通视频，重建逐帧相机运动，并导出统一的笛卡尔位姿数据。时间单位为秒、姿态为 Quaternion `x,y,z,w`。未经外部尺度标定时，长度明确标为 `reconstruction_unit`，不会冒充物理米。
 
 ## 快速启动
 
