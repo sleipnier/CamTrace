@@ -9,6 +9,7 @@ import hashlib
 import hmac
 import json
 import logging
+import mimetypes
 import os
 import shutil
 import threading
@@ -110,10 +111,18 @@ def decode_cursor(cursor: str) -> tuple[str, str]:
 
 
 def public_job(job: dict[str, Any]) -> dict[str, Any]:
-    payload = {key: value for key, value in job.items() if key != "archivePath"}
+    payload = {
+        key: value
+        for key, value in job.items()
+        if key not in {"archivePath", "sourceVideoPath"}
+    }
     if job.get("status") == "succeeded":
         archive_value = job.get("archivePath")
         payload["resultAvailable"] = bool(archive_value and Path(archive_value).is_file())
+        video_value = job.get("sourceVideoPath")
+        payload["sourceVideoAvailable"] = bool(video_value and Path(video_value).is_file())
+        if payload["sourceVideoAvailable"]:
+            payload["sourceVideoUrl"] = f"/api/jobs/{job['id']}/source-video"
     return payload
 
 
@@ -224,6 +233,8 @@ def run_job(job_id: str, upload_path: Path) -> None:
             set_stage(job_id, "packaging", 90, "正在验证轨迹并打包数据集")
 
         archive, _ = build_dataset(upload_path, CONFIG, pipeline)
+        source_video = archive.parent / f"source_video{upload_path.suffix.lower()}"
+        shutil.copyfile(upload_path, source_video)
         with zipfile.ZipFile(archive) as dataset:
             manifest_bytes = dataset.read("manifest.json")
             manifest = json.loads(manifest_bytes)
@@ -267,6 +278,7 @@ def run_job(job_id: str, upload_path: Path) -> None:
                 "archivePath": str(archive),
                 "datasetJobId": str(manifest["job_id"]),
                 "resultAvailable": True,
+                "sourceVideoPath": str(source_video),
                 "resultExpiresAt": (
                     datetime.now(timezone.utc) + timedelta(seconds=CONFIG.result_ttl_seconds)
                 ).isoformat(),
@@ -557,6 +569,19 @@ def download_dataset(job_id: str) -> FileResponse:
     _, archive = archive_for_job(job_id)
     return FileResponse(archive, media_type="application/zip", filename=archive.name)
 
+
+@app.get("/api/jobs/{job_id}/source-video")
+def source_video(job_id: str) -> FileResponse:
+    job = read_job(job_id)
+    if job.get("status") != "succeeded":
+        raise HTTPException(409, detail={"code": "JOB_NOT_READY", "message": "任务结果尚未就绪"})
+    video_value = job.get("sourceVideoPath")
+    video = Path(video_value) if video_value else None
+    if video is None or not video.is_file():
+        raise HTTPException(410, detail={"code": "SOURCE_VIDEO_EXPIRED", "message": "原始视频已经过期或不可用"})
+    media_type = mimetypes.guess_type(video.name)[0] or "application/octet-stream"
+
+    return FileResponse(video, media_type=media_type)
 
 @app.get("/api/jobs/{job_id}/artifacts/{name}")
 def download_artifact(job_id: str, name: str) -> Response:

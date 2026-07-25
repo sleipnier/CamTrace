@@ -114,6 +114,28 @@ class ApiContractTest(unittest.TestCase):
         expired = self.client.get("/api/jobs/vtc_result")
         self.assertFalse(expired.json()["resultAvailable"])
 
+    def test_succeeded_job_exposes_retained_source_video(self) -> None:
+        video = Path(self.temporary.name) / "source_video.mp4"
+        video.write_bytes(b"original-video")
+        job = self.make_job("vtc_video", "2026-07-24T00:00:00+00:00")
+        job["sourceVideoPath"] = str(video)
+        api.save_job(job)
+
+        detail = self.client.get("/api/jobs/vtc_video").json()
+        self.assertTrue(detail["sourceVideoAvailable"])
+        self.assertEqual(detail["sourceVideoUrl"], "/api/jobs/vtc_video/source-video")
+        self.assertNotIn("sourceVideoPath", detail)
+
+        response = self.client.get("/api/jobs/vtc_video/source-video")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.content, b"original-video")
+        self.assertEqual(response.headers["content-type"], "video/mp4")
+
+        partial = self.client.get("/api/jobs/vtc_video/source-video", headers={"Range": "bytes=0-7"})
+        self.assertEqual(partial.status_code, 206)
+        self.assertEqual(partial.content, b"original")
+        self.assertEqual(partial.headers["content-range"], "bytes 0-7/14")
+
     def test_visualization_state_reloads_from_disk(self) -> None:
         state = {
             "id": "viz_saved",

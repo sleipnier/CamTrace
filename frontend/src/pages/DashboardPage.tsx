@@ -1,7 +1,7 @@
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   AlertTriangle, ArrowDown, Check, Download, FileVideo, Pause, Play,
-  RotateCcw, Route, Upload, X,
+  RotateCcw, Route, Upload, Video, X,
 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { jobsApi, trajectoryApi, visualizationsApi, type JobDetail } from '../api'
@@ -59,11 +59,14 @@ export function DashboardPage() {
   const queryClient = useQueryClient()
   const inputRef = useRef<HTMLInputElement>(null)
   const trajectoryInputRef = useRef<HTMLInputElement>(null)
+  const sourceVideoRef = useRef<HTMLVideoElement>(null)
   const [file, setFile] = useState<File | null>(null)
   const [fileError, setFileError] = useState('')
   const [activeJobId, setActiveJobId] = useState<string | null>(null)
   const [activeIndex, setActiveIndex] = useState(0)
   const [playing, setPlaying] = useState(false)
+  const [sourceVideoOpen, setSourceVideoOpen] = useState(true)
+  const [sourceVideoError, setSourceVideoError] = useState(false)
   const [speed, setSpeed] = useState(1)
   const [localTrajectory, setLocalTrajectory] = useState<Awaited<ReturnType<typeof trajectoryApi.parseLocal>> | null>(null)
   const [trajectorySourceFile, setTrajectorySourceFile] = useState<File | null>(null)
@@ -147,9 +150,23 @@ export function DashboardPage() {
   const trajectory = localTrajectory ?? trajectoryQuery.data
   const finished = Boolean(localTrajectory) || job?.status === 'succeeded'
   const point = trajectory?.points[activeIndex]
+  const sourceVideoUrl = job?.sourceVideoUrl ? apiUrl(job.sourceVideoUrl) : null
+
+  const indexAtTime = (time: number) => {
+    if (!trajectory?.points.length) return 0
+    let low = 0
+    let high = trajectory.points.length - 1
+    while (low < high) {
+      const middle = Math.ceil((low + high) / 2)
+      if (trajectory.points[middle].timeFromStartS <= time) low = middle
+      else high = middle - 1
+    }
+    const next = Math.min(low + 1, trajectory.points.length - 1)
+    return Math.abs(trajectory.points[next].timeFromStartS - time) < Math.abs(trajectory.points[low].timeFromStartS - time) ? next : low
+  }
 
   useEffect(() => {
-    if (!playing || !trajectory || trajectory.points.length < 2) return
+    if (!playing || sourceVideoUrl || !trajectory || trajectory.points.length < 2) return
     const currentIndex = Math.min(activeIndex, trajectory.points.length - 1)
     const nextIndex = currentIndex >= trajectory.points.length - 1 ? 0 : currentIndex + 1
     const currentTime = trajectory.points[currentIndex].timeFromStartS
@@ -158,7 +175,33 @@ export function DashboardPage() {
     const sourceDelay = nextIndex === 0 ? fallbackDelay : Math.max((nextTime - currentTime) * 1000, 0)
     const timer = window.setTimeout(() => setActiveIndex(nextIndex), Math.max(sourceDelay / speed, 16))
     return () => window.clearTimeout(timer)
-  }, [activeIndex, playing, speed, trajectory])
+  }, [activeIndex, playing, sourceVideoUrl, speed, trajectory])
+
+  useEffect(() => {
+    const video = sourceVideoRef.current
+    if (!video || !sourceVideoUrl) return
+    video.playbackRate = speed
+    if (!playing) {
+      video.pause()
+      return
+    }
+    const targetTime = trajectory?.points[activeIndex]?.timeFromStartS ?? 0
+    if (video.readyState > 0 && Math.abs(video.currentTime - targetTime) > 0.12) video.currentTime = targetTime
+    void video.play().catch(() => setPlaying(false))
+  }, [playing, sourceVideoUrl, speed])
+
+  useEffect(() => {
+    const video = sourceVideoRef.current
+    if (!video || !sourceVideoUrl || !playing) return
+    let animationFrame = 0
+    const synchronize = () => {
+      const nextIndex = indexAtTime(video.currentTime)
+      setActiveIndex((current) => current === nextIndex ? current : nextIndex)
+      animationFrame = window.requestAnimationFrame(synchronize)
+    }
+    animationFrame = window.requestAnimationFrame(synchronize)
+    return () => window.cancelAnimationFrame(animationFrame)
+  }, [playing, sourceVideoUrl, trajectory])
 
   const chooseFile = (next?: File) => {
     setFileError('')
@@ -167,7 +210,7 @@ export function DashboardPage() {
     if (!allowed.includes(next.type) && !/\.(mp4|mov|mkv|avi|webm|m4v)$/i.test(next.name)) return setFileError('不支持这个视频格式')
     setFile(next)
   }
-  const reset = () => { setFile(null); setActiveJobId(null); setLocalTrajectory(null); setTrajectorySourceFile(null); setVisualizationId(null); setActiveIndex(0); setPlaying(false); setFileError('') }
+  const reset = () => { setFile(null); setActiveJobId(null); setLocalTrajectory(null); setTrajectorySourceFile(null); setVisualizationId(null); setActiveIndex(0); setPlaying(false); setSourceVideoOpen(true); setSourceVideoError(false); setFileError('') }
   const phase = finished ? 'result' : activeJobId ? 'processing' : 'upload'
   const openJob = (jobId: string) => {
     setLocalTrajectory(null)
@@ -175,6 +218,8 @@ export function DashboardPage() {
     setVisualizationId(null)
     setActiveIndex(0)
     setPlaying(false)
+    setSourceVideoOpen(true)
+    setSourceVideoError(false)
     setFile(null)
     setFileError('')
     setActiveJobId(jobId)
@@ -228,8 +273,18 @@ export function DashboardPage() {
             {phase === 'result' && trajectory && point && (
               <div className="result-stage">
                 <div className="canvas-top"><span>3D CAMERA TRAJECTORY</span><div><i className="green-dot" /> START <i className="orange-dot" /> CURRENT</div></div>
-                <TrajectoryCanvas trajectory={trajectory} activeIndex={activeIndex} />
-                <div className="transport"><button className="transport-button" onClick={() => setPlaying(!playing)}>{playing ? <Pause /> : <Play />}</button><button className="transport-button" onClick={() => setActiveIndex(0)}><RotateCcw /></button><span className="timecode">{point.timeFromStartS.toFixed(2)}s</span><input type="range" min="0" max={trajectory.points.length - 1} value={activeIndex} onChange={(e) => setActiveIndex(Number(e.target.value))} /><span>{trajectory.points.at(-1)?.timeFromStartS.toFixed(2)}s</span><select value={speed} onChange={(e) => setSpeed(Number(e.target.value))}><option value="0.5">0.5×</option><option value="1">1×</option><option value="2">2×</option><option value="4">4×</option></select></div>
+                <div className="trajectory-viewer">
+                  <TrajectoryCanvas trajectory={trajectory} activeIndex={activeIndex} />
+                  {sourceVideoUrl && !sourceVideoOpen && <button className="source-video-reopen" onClick={() => setSourceVideoOpen(true)}><Video /> 显示原视频</button>}
+                  {sourceVideoUrl && (
+                    <div className={`source-video-window ${sourceVideoOpen ? '' : 'source-video-window-hidden'}`}>
+                      <div className="source-video-title"><span><i /> 原始视频 · 同步</span><button aria-label="关闭原始视频窗口" onClick={() => setSourceVideoOpen(false)}><X /></button></div>
+                      {sourceVideoError && <div className="source-video-error"><AlertTriangle />浏览器无法播放该原始视频格式</div>}
+                      <video ref={sourceVideoRef} muted playsInline preload="metadata" src={sourceVideoUrl} onEnded={() => setPlaying(false)} onError={() => setSourceVideoError(true)} />
+                    </div>
+                  )}
+                </div>
+                <div className="transport"><button className="transport-button" onClick={() => setPlaying(!playing)}>{playing ? <Pause /> : <Play />}</button><button className="transport-button" onClick={() => { setPlaying(false); setActiveIndex(0); if (sourceVideoRef.current?.readyState) sourceVideoRef.current.currentTime = 0 }}><RotateCcw /></button><span className="timecode">{point.timeFromStartS.toFixed(2)}s</span><input type="range" min="0" max={trajectory.points.length - 1} value={activeIndex} onChange={(e) => { const index = Number(e.target.value); setActiveIndex(index); if (sourceVideoRef.current?.readyState) sourceVideoRef.current.currentTime = trajectory.points[index].timeFromStartS }} /><span>{trajectory.points.at(-1)?.timeFromStartS.toFixed(2)}s</span><select value={speed} onChange={(e) => setSpeed(Number(e.target.value))}><option value="0.5">0.5×</option><option value="1">1×</option><option value="2">2×</option><option value="4">4×</option></select></div>
               </div>
             )}
             {phase === 'result' && job?.resultAvailable === false && <div className="processing-stage failed-stage"><div className="processing-visual"><AlertTriangle /><span>EXPIRED</span><h2>任务结果已经过期</h2><p>任务记录仍然保留，但轨迹数据集已按保留策略清理。</p><button className="button button-light" onClick={reset}>重新处理视频</button></div></div>}

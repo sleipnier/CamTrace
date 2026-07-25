@@ -33,6 +33,8 @@ export interface JobSummary {
   progress: JobProgress
   resultAvailable?: boolean
   resultExpiresAt?: string
+  sourceVideoAvailable?: boolean
+  sourceVideoUrl?: string
 }
 
 export interface JobDetail extends JobSummary {
