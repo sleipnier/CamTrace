@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "job_id": "2abc0b60ef5b42f88b6f14784add1e19",
+  "status": "succeeded",
+  "created_at": "2026-07-25T07:32:19.338158+00:00",
+  "completed_at": "2026-07-25T07:35:44.656319+00:00",
+  "source": {
+    "original_name": "vtc_73f6a9eade3c.mp4",
+    "size_bytes": 2547424,
+    "sha256": "519971d1a7e328617fa05ed63449dc788a27f9ed27a5e2d269a18fde9ee70842",
+    "codec": "hevc",
+    "duration_seconds": 11.966667,
+    "width": 720,
+    "height": 1280,
+    "frame_count": 359,
+    "fps": 30.0
+  },
+  "pipeline": {
+    "name": "MegaSaM video-to-camera",
+    "first_pose_normalized": true,
+    "robot_execution_ready": false
+  },
+  "outputs": [
+    {
+      "name": "camera_pose_stamped.jsonl",
+      "size_bytes": 225228,
+      "sha256": "bad55b09ea94d923d3297e0e45ff847e93ce34f07bd13ed6afb7ee5ad39dbe3b"
+    },
+    {
+      "name": "camera_trajectory.csv",
+      "size_bytes": 87196,
+      "sha256": "a18274d79b852c9acd6cb8328f97e28131940cef1cb7baccd468d1fe1c24f351"
+    },
+    {
+      "name": "camera_cartesian_trajectory.json",
+      "size_bytes": 125175,
+      "sha256": "ef2a22a2e214a2b71be37b2025ad7816c0a4f7ae88b44cf4a628c1edc13aab25"
+    }
+  ]
+}
